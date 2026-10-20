@@ -93,64 +93,67 @@ export const App: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="w-full h-full pb-20">
+          <div className="w-full h-full">
             <UploadView
               onSuccess={() => {
                 setTab("feed");
                 fetchFeed();
+              }}
+              onCancel={() => {
+                setTab("feed");
               }}
             />
           </div>
         )}
       </div>
 
-      {/* Fixed Solid Bottom Navigation Bar */}
-      <nav
-        aria-label="Bottom Navigation"
-        className="fixed bottom-0 left-0 right-0 h-16 bg-black/95 border-t border-zinc-900/80 flex items-center justify-around max-w-md mx-auto z-50 px-6 backdrop-blur-md"
-        style={{
-          boxShadow: "0 -8px 24px rgba(0, 0, 0, 0.8)",
-          paddingBottom: "env(safe-area-inset-bottom, 0px)",
-        }}
-      >
-        <button
-          onClick={() => setTab("feed")}
-          aria-label="Home Feed"
-          className={`flex flex-col items-center justify-center gap-1 transition ${
-            tab === "feed" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-          }`}
-        >
-          <Home className="w-5 h-5 stroke-[2]" />
-          <span className="text-[10px] font-medium tracking-wider">Feed</span>
-        </button>
-
-        {/* Center Minimal Plus Action */}
-        <button
-          onClick={() => setTab("upload")}
-          aria-label="Create Post"
-          className="flex items-center justify-center transition-transform active:scale-95"
-        >
-          <div className="w-12 h-8 rounded-xl bg-gradient-to-r from-cyan-400 via-white to-pink-500 p-[1.5px] shadow-lg shadow-white/10">
-            <div className="w-full h-full bg-black rounded-[10px] flex items-center justify-center">
-              <Plus className="w-4 h-4 text-white stroke-[2.5]" />
-            </div>
-          </div>
-        </button>
-
-        <button
-          onClick={() => {
-            fetchFeed();
-            if (containerRef.current) {
-              containerRef.current.scrollTo({ top: 0, behavior: "smooth" });
-            }
+      {/* Fixed Solid Bottom Navigation Bar (Hidden when in upload mode for pure immersive TikTok experience) */}
+      {tab === "feed" && (
+        <nav
+          aria-label="Bottom Navigation"
+          className="fixed bottom-0 left-0 right-0 h-16 bg-black/95 border-t border-zinc-900/80 flex items-center justify-around max-w-md mx-auto z-50 px-6 backdrop-blur-md"
+          style={{
+            boxShadow: "0 -8px 24px rgba(0, 0, 0, 0.8)",
+            paddingBottom: "env(safe-area-inset-bottom, 0px)",
           }}
-          aria-label="Discover Refresh"
-          className="flex flex-col items-center justify-center gap-1 text-zinc-500 hover:text-zinc-300 transition"
         >
-          <Compass className="w-5 h-5 stroke-[2]" />
-          <span className="text-[10px] font-medium tracking-wider">Explore</span>
-        </button>
-      </nav>
+          <button
+            onClick={() => setTab("feed")}
+            aria-label="Home Feed"
+            className="flex flex-col items-center justify-center gap-1 text-white transition"
+          >
+            <Home className="w-5 h-5 stroke-[2]" />
+            <span className="text-[10px] font-medium tracking-wider">Feed</span>
+          </button>
+
+          {/* Center TikTok Plus Action */}
+          <button
+            onClick={() => setTab("upload")}
+            aria-label="Create Post"
+            className="flex items-center justify-center transition-transform active:scale-95"
+          >
+            <div className="w-12 h-8 rounded-xl bg-gradient-to-r from-cyan-400 via-white to-pink-500 p-[1.5px] shadow-lg shadow-white/10">
+              <div className="w-full h-full bg-black rounded-[10px] flex items-center justify-center">
+                <Plus className="w-4 h-4 text-white stroke-[2.5]" />
+              </div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => {
+              fetchFeed();
+              if (containerRef.current) {
+                containerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+              }
+            }}
+            aria-label="Discover Refresh"
+            className="flex flex-col items-center justify-center gap-1 text-zinc-500 hover:text-zinc-300 transition"
+          >
+            <Compass className="w-5 h-5 stroke-[2]" />
+            <span className="text-[10px] font-medium tracking-wider">Explore</span>
+          </button>
+        </nav>
+      )}
     </div>
   );
 };
