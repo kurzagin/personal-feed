@@ -1,5 +1,5 @@
-import { S3Client, GetObjectCommand, PutObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { S3Client, GetObjectCommand, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 export interface R2Config {
@@ -49,6 +49,35 @@ export class StorageProvider {
       // Local encrypted mock storage
       const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
       writeFileSync(filePath, data);
+    }
+  }
+
+  async deleteEncryptedObject(key: string): Promise<void> {
+    try {
+      if (this.s3) {
+        await this.s3.send(
+          new DeleteObjectCommand({
+            Bucket: this.bucket,
+            Key: key,
+          })
+        );
+      } else {
+        const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
+        if (existsSync(filePath)) {
+          unlinkSync(filePath);
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to delete storage key ${key}:`, err);
+    }
+  }
+
+  async deleteEncryptedObjects(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    const concurrency = 6;
+    for (let i = 0; i < keys.length; i += concurrency) {
+      const batch = keys.slice(i, i + concurrency);
+      await Promise.all(batch.map((k) => this.deleteEncryptedObject(k)));
     }
   }
 
