@@ -24,6 +24,24 @@ export function initDatabase(dbPath: string = "personal_feed.db"): Database {
     );
   `);
 
+  // Post Items table for multi-file posts (carousels: images and videos)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS post_items (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      item_index INTEGER NOT NULL,
+      media_type TEXT NOT NULL,
+      duration_seconds REAL,
+      aspect_ratio REAL NOT NULL,
+      r2_storage_key TEXT NOT NULL,
+      encrypted_key TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_post_items_post_id ON post_items(post_id, item_index);`);
+
   // Danbooru Tags table
   db.run(`
     CREATE TABLE IF NOT EXISTS tags (

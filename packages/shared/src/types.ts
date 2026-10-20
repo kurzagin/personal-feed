@@ -2,6 +2,10 @@ import { z } from "zod";
 import { TagCategorySchema } from "./danbooru";
 
 export const MediaTypeSchema = z.enum([
+  "video",
+  "image",
+  "mixed",         // multi-item containing both images and videos
+  // Legacy types for backwards-compatibility:
   "short_video",   // <= 3 mins
   "long_video",    // > 3 mins (up to 1h+)
   "cosplay_set",   // Multi-image photo gallery
@@ -18,6 +22,19 @@ export interface Tag {
   category: z.infer<typeof TagCategorySchema>;
 }
 
+export interface PostItem {
+  id: string;
+  post_id: string;
+  item_index: number;
+  media_type: "image" | "video";
+  duration_seconds: number | null;
+  aspect_ratio: number;
+  r2_storage_key: string;
+  encrypted_key: string;
+  content_hash: string;
+  created_at: number;
+}
+
 export interface Post {
   id: string;
   media_type: MediaType;
@@ -30,6 +47,7 @@ export interface Post {
   created_at: number;
   rating: PostRating;
   tags?: Tag[];
+  items?: PostItem[];
 }
 
 export interface WatchSessionInput {
