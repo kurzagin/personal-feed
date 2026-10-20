@@ -83,12 +83,12 @@ export async function syncDanbooruTags(minPostCount = 50) {
     transaction(batch);
   }
 
-  console.log(`✅ Danbooru sync finished! Synced ${insertedCount} top tags into SQLite.`);
+  console.log(`Danbooru sync finished! Synced ${insertedCount} top tags into SQLite.`);
 }
 
 if (import.meta.main) {
   syncDanbooruTags(100).catch((err) => {
-    console.error("❌ Sync failed:", err);
+    console.error("Sync failed:", err);
     process.exit(1);
   });
 }

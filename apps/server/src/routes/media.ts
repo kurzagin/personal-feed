@@ -1,9 +1,31 @@
 import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import { StorageProvider } from "../r2/client";
-import { unwrapContentKey, decryptChunk, CHUNK_SIZE, TAG_SIZE } from "@personal-feed/crypto";
+import { unwrapContentKey, decryptChunk, decryptBlob, CHUNK_SIZE, TAG_SIZE } from "@personal-feed/crypto";
 
 export function createMediaRoutes(db: Database, storage: StorageProvider, masterKey: Buffer) {
+  const resolveTarget = (idOrItemId: string) => {
+    // Try post first, then post_items
+    let row = db.query("SELECT * FROM posts WHERE id = ?").get(idOrItemId) as any;
+    let isItem = false;
+    let storageKeyId = idOrItemId;
+
+    if (row) {
+      // If it's a post, find the first post_item to get the actual storage itemId
+      const firstItem = db.query("SELECT * FROM post_items WHERE post_id = ? ORDER BY item_index ASC LIMIT 1").get(idOrItemId) as any;
+      if (firstItem) {
+        storageKeyId = firstItem.id;
+      }
+    } else {
+      row = db.query("SELECT * FROM post_items WHERE id = ?").get(idOrItemId) as any;
+      isItem = true;
+      if (row) {
+        storageKeyId = row.id;
+      }
+    }
+    return { entity: row, isItem, storageKeyId };
+  };
+
   const streamHandler = async (
     target: { r2_storage_key: string; encrypted_key: string; content_hash: string; media_type: string },
     headers: Record<string, string | undefined>,
@@ -98,5 +120,131 @@ export function createMediaRoutes(db: Database, storage: StorageProvider, master
         return { error: "Media item not found" };
       }
       return streamHandler(item, headers, set);
+    })
+    // Dynamic HLS VOD Playlist (R2 never sees the playlist, synthesized on-the-fly locally)
+    .get("/:id/playlist.m3u8", async ({ params: { id }, set }) => {
+      const { entity } = resolveTarget(id);
+      if (!entity || !entity.hls_segment_count) {
+        set.status = 404;
+        return { error: "HLS playlist not available for this item" };
+      }
+
+      const totalSegments = entity.hls_segment_count;
+      const duration = entity.duration_seconds || (totalSegments * 3);
+      const targetDuration = 4;
+
+      let m3u8 = "#EXTM3U\n";
+      m3u8 += "#EXT-X-VERSION:3\n";
+      m3u8 += `#EXT-X-TARGETDURATION:${targetDuration}\n`;
+      m3u8 += "#EXT-X-MEDIA-SEQUENCE:0\n";
+      m3u8 += "#EXT-X-PLAYLIST-TYPE:VOD\n\n";
+
+      const avgSegDuration = (duration / totalSegments).toFixed(3);
+      for (let i = 0; i < totalSegments; i++) {
+        // Last segment adjusts remainder duration
+        const segDur = i === totalSegments - 1 ? (duration - (totalSegments - 1) * parseFloat(avgSegDuration)).toFixed(3) : avgSegDuration;
+        m3u8 += `#EXTINF:${segDur},\n`;
+        m3u8 += `/api/media/${id}/segment/${i}.ts\n`;
+      }
+      m3u8 += "#EXT-X-ENDLIST\n";
+
+      set.headers["Content-Type"] = "application/vnd.apple.mpegurl";
+      set.headers["Cache-Control"] = "no-cache";
+      return m3u8;
+    })
+    // Individual decrypted HLS segment streaming
+    .get("/:id/segment/:segmentIndex", async ({ params: { id, segmentIndex }, set }) => {
+      const { entity, storageKeyId } = resolveTarget(id);
+      if (!entity) {
+        set.status = 404;
+        return { error: "Media not found" };
+      }
+
+      const segIdx = parseInt(segmentIndex.replace(".ts", ""), 10);
+      const contentKey = unwrapContentKey(entity.encrypted_key, masterKey);
+      const segKey = `media/${storageKeyId}/hls/${segIdx}.enc`;
+
+      try {
+        const encryptedSeg = await storage.getEncryptedObject(segKey);
+        const decryptedSeg = decryptBlob(encryptedSeg, contentKey);
+
+        set.headers["Content-Type"] = "video/MP2T";
+        set.headers["Content-Length"] = decryptedSeg.length.toString();
+        set.headers["Cache-Control"] = "public, max-age=31536000, immutable";
+        return new Response(decryptedSeg);
+      } catch (err: any) {
+        set.status = 404;
+        return { error: `Segment not found or decryption failed: ${err?.message}` };
+      }
+    })
+    // 3x3 Preview grid thumbnail
+    .get("/:id/thumbnail-grid", async ({ params: { id }, set }) => {
+      const { entity, storageKeyId } = resolveTarget(id);
+      if (!entity) {
+        set.status = 404;
+        return { error: "Media not found" };
+      }
+
+      const contentKey = unwrapContentKey(entity.encrypted_key, masterKey);
+      const gridKey = `media/${storageKeyId}/grid_3x3.enc`;
+
+      try {
+        const encData = await storage.getEncryptedObject(gridKey);
+        const decData = decryptBlob(encData, contentKey);
+
+        set.headers["Content-Type"] = "image/webp";
+        set.headers["Cache-Control"] = "public, max-age=86400";
+        return new Response(decData);
+      } catch {
+        // Fallback to primary stream
+        return streamHandler(entity, {}, set);
+      }
+    })
+    // 1-second interval scrubbing sprite sheet
+    .get("/:id/scrub/sheet/:sheetIndex", async ({ params: { id, sheetIndex }, set }) => {
+      const { entity, storageKeyId } = resolveTarget(id);
+      if (!entity) {
+        set.status = 404;
+        return { error: "Media not found" };
+      }
+
+      const sIdx = parseInt(sheetIndex.replace(".webp", ""), 10);
+      const contentKey = unwrapContentKey(entity.encrypted_key, masterKey);
+      const sheetKey = `media/${storageKeyId}/scrub/${sIdx}.enc`;
+
+      try {
+        const encData = await storage.getEncryptedObject(sheetKey);
+        const decData = decryptBlob(encData, contentKey);
+
+        set.headers["Content-Type"] = "image/webp";
+        set.headers["Cache-Control"] = "public, max-age=31536000, immutable";
+        return new Response(decData);
+      } catch (err: any) {
+        set.status = 404;
+        return { error: `Scrub sheet not found: ${err?.message}` };
+      }
+    })
+    // Scrubbing WebVTT manifest
+    .get("/:id/scrub/vtt", async ({ params: { id }, set }) => {
+      const { entity, storageKeyId } = resolveTarget(id);
+      if (!entity) {
+        set.status = 404;
+        return { error: "Media not found" };
+      }
+
+      const contentKey = unwrapContentKey(entity.encrypted_key, masterKey);
+      const vttKey = `media/${storageKeyId}/scrub.vtt.enc`;
+
+      try {
+        const encData = await storage.getEncryptedObject(vttKey);
+        const decData = decryptBlob(encData, contentKey);
+
+        set.headers["Content-Type"] = "text/vtt; charset=utf-8";
+        set.headers["Cache-Control"] = "public, max-age=86400";
+        return new Response(decData);
+      } catch (err: any) {
+        set.status = 404;
+        return { error: `Scrub VTT not found: ${err?.message}` };
+      }
     });
 }

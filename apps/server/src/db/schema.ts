@@ -20,9 +20,17 @@ export function initDatabase(dbPath: string = "personal_feed.db"): Database {
       encrypted_key TEXT NOT NULL,
       content_hash TEXT UNIQUE NOT NULL,
       created_at INTEGER NOT NULL,
-      rating TEXT DEFAULT 'general'
+      rating TEXT DEFAULT 'general',
+      hls_segment_count INTEGER DEFAULT 0,
+      has_scrub_sheet INTEGER DEFAULT 0,
+      has_thumbnail_grid INTEGER DEFAULT 0
     );
   `);
+
+  // Try adding columns if existing database table
+  try { db.run("ALTER TABLE posts ADD COLUMN hls_segment_count INTEGER DEFAULT 0;"); } catch {}
+  try { db.run("ALTER TABLE posts ADD COLUMN has_scrub_sheet INTEGER DEFAULT 0;"); } catch {}
+  try { db.run("ALTER TABLE posts ADD COLUMN has_thumbnail_grid INTEGER DEFAULT 0;"); } catch {}
 
   // Post Items table for multi-file posts (carousels: images and videos)
   db.run(`
@@ -36,9 +44,16 @@ export function initDatabase(dbPath: string = "personal_feed.db"): Database {
       r2_storage_key TEXT NOT NULL,
       encrypted_key TEXT NOT NULL,
       content_hash TEXT NOT NULL,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      hls_segment_count INTEGER DEFAULT 0,
+      has_scrub_sheet INTEGER DEFAULT 0,
+      has_thumbnail_grid INTEGER DEFAULT 0
     );
   `);
+
+  try { db.run("ALTER TABLE post_items ADD COLUMN hls_segment_count INTEGER DEFAULT 0;"); } catch {}
+  try { db.run("ALTER TABLE post_items ADD COLUMN has_scrub_sheet INTEGER DEFAULT 0;"); } catch {}
+  try { db.run("ALTER TABLE post_items ADD COLUMN has_thumbnail_grid INTEGER DEFAULT 0;"); } catch {}
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_post_items_post_id ON post_items(post_id, item_index);`);
 

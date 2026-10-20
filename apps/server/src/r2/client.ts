@@ -18,7 +18,8 @@ export class StorageProvider {
     this.bucket = config?.bucketName || process.env.R2_BUCKET || "personal-feed-encrypted";
     this.localFallbackDir = join(process.cwd(), ".local_storage");
 
-    if (config?.accountId && config?.accessKeyId && config?.secretAccessKey) {
+    const isPlaceholder = config?.accountId?.includes("your_") || config?.accessKeyId?.includes("your_");
+    if (config?.accountId && config?.accessKeyId && config?.secretAccessKey && !isPlaceholder) {
       this.s3 = new S3Client({
         region: "auto",
         endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
@@ -48,6 +49,25 @@ export class StorageProvider {
       // Local encrypted mock storage
       const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
       writeFileSync(filePath, data);
+    }
+  }
+
+  async getEncryptedObject(key: string): Promise<Buffer> {
+    if (this.s3) {
+      const res = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+        })
+      );
+      const bytes = await res.Body?.transformToByteArray();
+      return bytes ? Buffer.from(bytes) : Buffer.alloc(0);
+    } else {
+      const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
+      if (!existsSync(filePath)) {
+        throw new Error(`Storage key not found: ${key}`);
+      }
+      return readFileSync(filePath);
     }
   }
 
