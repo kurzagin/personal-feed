@@ -33,6 +33,9 @@ export interface PostItem {
   encrypted_key: string;
   content_hash: string;
   created_at: number;
+  hls_segment_count?: number;
+  has_scrub_sheet?: boolean;
+  has_thumbnail_grid?: boolean;
 }
 
 export interface Post {
@@ -48,6 +51,9 @@ export interface Post {
   rating: PostRating;
   tags?: Tag[];
   items?: PostItem[];
+  hls_segment_count?: number;
+  has_scrub_sheet?: boolean;
+  has_thumbnail_grid?: boolean;
 }
 
 export interface WatchSessionInput {

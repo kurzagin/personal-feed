@@ -15,7 +15,7 @@ const PASSPHRASE = process.env.APP_MASTER_PASSPHRASE;
 const SALT_STR = process.env.APP_MASTER_SALT;
 
 if (!PASSPHRASE || !SALT_STR) {
-  console.error("❌ ERROR: APP_MASTER_PASSPHRASE and APP_MASTER_SALT must be defined in .env");
+  console.error("ERROR: APP_MASTER_PASSPHRASE and APP_MASTER_SALT must be defined in .env");
   process.exit(1);
 }
 
@@ -63,6 +63,6 @@ export const app = new Elysia()
   })
   .listen(port);
 
-console.log(`🦊 Personal Feed Daemon & Web UI live at http://localhost:${port}`);
+console.log(`Personal Feed Daemon & Web UI live at http://localhost:${port}`);
 
 export type App = typeof app;

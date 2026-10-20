@@ -126,6 +126,9 @@ export class FeedRanker {
         content_hash: p.content_hash,
         created_at: p.created_at,
         rating: p.rating,
+        hls_segment_count: p.hls_segment_count,
+        has_scrub_sheet: Boolean(p.has_scrub_sheet),
+        has_thumbnail_grid: Boolean(p.has_thumbnail_grid),
         tags,
         items: itemsByPost.get(p.id) || [],
       };

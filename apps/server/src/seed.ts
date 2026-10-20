@@ -8,7 +8,7 @@ const PASSPHRASE = process.env.APP_MASTER_PASSPHRASE;
 const SALT_STR = process.env.APP_MASTER_SALT;
 
 if (!PASSPHRASE || !SALT_STR) {
-  console.error("❌ ERROR: APP_MASTER_PASSPHRASE and APP_MASTER_SALT must be defined in .env to run seed");
+  console.error("ERROR: APP_MASTER_PASSPHRASE and APP_MASTER_SALT must be defined in .env to run seed");
   process.exit(1);
 }
 
@@ -22,7 +22,7 @@ const storage = new StorageProvider({
 const masterKey = deriveMasterKey(PASSPHRASE, Buffer.from(SALT_STR, "utf-8"));
 
 async function seed() {
-  console.log("🌱 Seeding Danbooru tags and sample encrypted mock posts using .env credentials...");
+  console.log("Seeding Danbooru tags and sample encrypted mock posts using .env credentials...");
 
   const tags = [
     { name: "genshin_impact", category: "copyright" },
@@ -95,7 +95,7 @@ async function seed() {
     }
   }
 
-  console.log("✅ Seed completed successfully with .env encryption keys!");
+  console.log("Seed completed successfully with .env encryption keys!");
 }
 
 seed();

@@ -67,3 +67,31 @@ export function decryptChunk(
 
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
+
+/**
+ * Encrypts an arbitrary buffer (like an HLS segment, image, or sprite sheet) as a single AES-256-GCM unit.
+ * Format: [12-byte IV][16-byte Tag][Ciphertext]
+ */
+export function encryptBlob(plainBuffer: Buffer, key: Buffer): Buffer {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plainBuffer), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, ciphertext]);
+}
+
+/**
+ * Decrypts a buffer encrypted via encryptBlob.
+ */
+export function decryptBlob(encryptedBuffer: Buffer, key: Buffer): Buffer {
+  if (encryptedBuffer.length < 28) {
+    throw new Error("Encrypted blob too small");
+  }
+  const iv = encryptedBuffer.subarray(0, 12);
+  const tag = encryptedBuffer.subarray(12, 28);
+  const ciphertext = encryptedBuffer.subarray(28);
+
+  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}

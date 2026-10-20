@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import type { Post, Tag } from "@personal-feed/shared";
 import { Heart, Volume2, VolumeX, Play, ChevronLeft, ChevronRight } from "lucide-react";
+import Hls from "hls.js";
 
 interface FeedCardProps {
   post: Post & { tags: Tag[] };
@@ -16,12 +17,18 @@ interface FeedCardProps {
 
 export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSession }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const [activeItemIndex, setActiveItemIndex] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [isMuted, setIsMuted] = useState<boolean>(true);
   const [isFavorited, setIsFavorited] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(post.duration_seconds || 0);
+
+  // 1-second scrubbing state
+  const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [scrubPreviewTime, setScrubPreviewTime] = useState<number>(0);
+  const [scrubPositionPct, setScrubPositionPct] = useState<number>(0);
 
   const startTimeRef = useRef<number>(Date.now());
   const loopCountRef = useRef<number>(0);
@@ -36,9 +43,59 @@ export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSess
   const aspectRatio = currentItem ? currentItem.aspect_ratio : post.aspect_ratio;
   const isHorizontal = aspectRatio > 1.0;
 
-  const streamUrl = currentItem
+  const activeId = currentItem ? currentItem.id : post.id;
+  const hasHls = (currentItem ? currentItem.hls_segment_count : post.hls_segment_count) ?? 0 > 0;
+  const hasScrub = Boolean(currentItem ? currentItem.has_scrub_sheet : post.has_scrub_sheet);
+
+  const playlistUrl = `/api/media/${activeId}/playlist.m3u8`;
+  const streamFallbackUrl = currentItem
     ? `/api/media/item/${currentItem.id}/stream`
     : `/api/media/${post.id}/stream`;
+  const posterGridUrl = `/api/media/${activeId}/thumbnail-grid`;
+
+  // Initialize HLS / native video playback
+  useEffect(() => {
+    if (!isVideo || !videoRef.current) return;
+
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    if (hasHls && Hls.isSupported()) {
+      const hls = new Hls({
+        maxBufferLength: 15,
+        maxMaxBufferLength: 30,
+        enableWorker: true,
+        lowLatencyMode: false,
+      });
+
+      hls.loadSource(playlistUrl);
+      hls.attachMedia(videoRef.current);
+      hlsRef.current = hls;
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          console.warn("HLS fatal error, falling back to direct stream:", data.type);
+          if (videoRef.current) {
+            videoRef.current.src = streamFallbackUrl;
+          }
+        }
+      });
+    } else if (hasHls && videoRef.current.canPlayType("application/vnd.apple.mpegurl")) {
+      // Native Safari / iOS HLS
+      videoRef.current.src = playlistUrl;
+    } else {
+      videoRef.current.src = streamFallbackUrl;
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [activeId, isVideo, hasHls]);
 
   useEffect(() => {
     if (isVideo && videoRef.current) {
@@ -109,7 +166,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSess
       {isHorizontal && isVideo && (
         <div
           className="absolute inset-0 bg-cover bg-center filter blur-3xl opacity-20 scale-125 pointer-events-none"
-          style={{ backgroundImage: `url(${streamUrl})` }}
+          style={{ backgroundImage: `url(${posterGridUrl})` }}
         />
       )}
 
@@ -121,8 +178,8 @@ export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSess
         >
           <video
             ref={videoRef}
-            key={streamUrl}
-            src={streamUrl}
+            key={activeId}
+            poster={hasHls ? posterGridUrl : undefined}
             playsInline
             loop={false}
             muted={isMuted}
@@ -218,26 +275,74 @@ export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSess
         )}
       </div>
 
-      {/* Sleek Bottom Scrubber for 1h+ / Long Videos */}
+      {/* Sleek Bottom Scrubber with 1s Thumbnail Scrubbing Sheet */}
       {isVideo && duration > 0 && (
-        <div className="absolute bottom-16 inset-x-4 z-20 flex items-center gap-2 pointer-events-auto">
-          <span className="text-[10px] text-white/50 font-mono tracking-tight">{formatTime(currentTime)}</span>
-          <input
-            type="range"
-            min={0}
-            max={duration}
-            value={currentTime}
-            aria-label="Progress scrub bar"
-            onChange={(e) => {
-              const target = parseFloat(e.target.value);
-              setCurrentTime(target);
-              if (videoRef.current) {
-                videoRef.current.currentTime = target;
-              }
-            }}
-            className="w-full h-0.5 bg-white/20 rounded-full appearance-none cursor-pointer accent-white"
-          />
-          <span className="text-[10px] text-white/50 font-mono tracking-tight">{formatTime(duration)}</span>
+        <div className="absolute bottom-16 inset-x-4 z-30 flex flex-col pointer-events-auto">
+          {/* Floating 1s Scrub Preview Bubble */}
+          {isScrubbing && hasScrub && (
+            <div
+              className="absolute bottom-8 -translate-x-1/2 flex flex-col items-center pointer-events-none transition-all"
+              style={{ left: `${Math.max(10, Math.min(90, scrubPositionPct * 100))}%` }}
+            >
+              <div className="p-1 rounded-lg bg-black/90 border border-white/20 shadow-2xl backdrop-blur-md overflow-hidden">
+                {(() => {
+                  const sec = Math.max(0, Math.min(Math.floor(scrubPreviewTime), Math.floor(duration)));
+                  const sheetIndex = Math.floor(sec / 100);
+                  const frameInSheet = sec % 100;
+                  const col = frameInSheet % 10;
+                  const row = Math.floor(frameInSheet / 10);
+                  const thumbWidth = 100;
+                  const thumbHeight = Math.round(thumbWidth / (aspectRatio || 1));
+                  const posX = -(col * thumbWidth);
+                  const posY = -(row * thumbHeight);
+
+                  return (
+                    <div
+                      style={{
+                        width: `${thumbWidth}px`,
+                        height: `${thumbHeight}px`,
+                        backgroundImage: `url(/api/media/${activeId}/scrub/sheet/${sheetIndex})`,
+                        backgroundPosition: `${posX}px ${posY}px`,
+                        backgroundSize: `${thumbWidth * 10}px auto`,
+                        backgroundRepeat: "no-repeat",
+                      }}
+                      className="rounded bg-black"
+                    />
+                  );
+                })()}
+                <div className="text-center font-mono text-[10px] text-white/90 pt-1">
+                  {formatTime(scrubPreviewTime)}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 w-full">
+            <span className="text-[10px] text-white/50 font-mono tracking-tight">{formatTime(currentTime)}</span>
+            <input
+              type="range"
+              min={0}
+              max={duration}
+              step={0.1}
+              value={currentTime}
+              aria-label="Progress scrub bar"
+              onTouchStart={() => setIsScrubbing(true)}
+              onTouchEnd={() => setIsScrubbing(false)}
+              onMouseDown={() => setIsScrubbing(true)}
+              onMouseUp={() => setIsScrubbing(false)}
+              onChange={(e) => {
+                const target = parseFloat(e.target.value);
+                setCurrentTime(target);
+                setScrubPreviewTime(target);
+                setScrubPositionPct(target / (duration || 1));
+                if (videoRef.current) {
+                  videoRef.current.currentTime = target;
+                }
+              }}
+              className="w-full h-1 bg-white/20 rounded-full appearance-none cursor-pointer accent-white"
+            />
+            <span className="text-[10px] text-white/50 font-mono tracking-tight">{formatTime(duration)}</span>
+          </div>
         </div>
       )}
     </div>
