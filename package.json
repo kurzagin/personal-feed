@@ -1,6 +1,13 @@
 {
   "name": "personal-feed",
   "private": true,
+  "scripts": {
+    "dev": "bun --parallel run dev:server dev:ui",
+    "dev:server": "bun run apps/server/src/index.ts",
+    "dev:ui": "bun run --cwd apps/web dev",
+    "build:ui": "bun run --cwd apps/web build",
+    "start": "bun run dev:server"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.750.0",
     "@elysiajs/cors": "1.2.0",

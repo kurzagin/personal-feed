@@ -17,6 +17,9 @@ node_modules/
 dist/
 build/
 .cache/
+apps/web/src/**/*.js
+apps/web/src/**/*.d.ts
+apps/web/src/**/*.map
 
 # OS and logs
 .DS_Store
