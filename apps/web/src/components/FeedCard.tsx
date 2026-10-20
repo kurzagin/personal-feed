@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import type { Post, Tag } from "@personal-feed/shared";
-import { Heart, Volume2, VolumeX, Play } from "lucide-react";
+import { Heart, Volume2, VolumeX, Play, ChevronLeft, ChevronRight } from "lucide-react";
 
 interface FeedCardProps {
   post: Post & { tags: Tag[] };
@@ -16,6 +16,7 @@ interface FeedCardProps {
 
 export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSession }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [activeItemIndex, setActiveItemIndex] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [isMuted, setIsMuted] = useState<boolean>(true);
   const [isFavorited, setIsFavorited] = useState<boolean>(false);
@@ -25,9 +26,19 @@ export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSess
   const startTimeRef = useRef<number>(Date.now());
   const loopCountRef = useRef<number>(0);
 
-  const isVideo = post.media_type.includes("video");
-  const isHorizontal = post.aspect_ratio > 1.0;
-  const streamUrl = `/api/media/${post.id}/stream`;
+  const hasMultipleItems = post.items && post.items.length > 1;
+  const currentItem = hasMultipleItems ? post.items![activeItemIndex] : null;
+
+  const isVideo = currentItem
+    ? currentItem.media_type === "video"
+    : post.media_type === "video" || post.media_type.includes("video");
+
+  const aspectRatio = currentItem ? currentItem.aspect_ratio : post.aspect_ratio;
+  const isHorizontal = aspectRatio > 1.0;
+
+  const streamUrl = currentItem
+    ? `/api/media/item/${currentItem.id}/stream`
+    : `/api/media/${post.id}/stream`;
 
   useEffect(() => {
     if (isVideo && videoRef.current) {
@@ -55,7 +66,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSess
         });
       }
     }
-  }, [isActive]);
+  }, [isActive, activeItemIndex, isVideo]);
 
   const togglePlay = () => {
     if (videoRef.current) {
@@ -110,6 +121,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSess
         >
           <video
             ref={videoRef}
+            key={streamUrl}
             src={streamUrl}
             playsInline
             loop={false}
@@ -132,11 +144,47 @@ export const FeedCard: React.FC<FeedCardProps> = ({ post, isActive, onRecordSess
       ) : (
         <div className="relative w-full h-full flex items-center justify-center p-2">
           <img
+            key={streamUrl}
             src={streamUrl}
             alt="Content"
             className="max-h-full max-w-full object-contain"
           />
         </div>
+      )}
+
+      {/* Carousel Horizontal Navigation & Dots for Multi-Item Posts */}
+      {hasMultipleItems && (
+        <>
+          <div className="absolute inset-x-3 top-1/2 -translate-y-1/2 flex items-center justify-between z-20 pointer-events-none">
+            <button
+              type="button"
+              disabled={activeItemIndex === 0}
+              onClick={(e) => {
+                e.stopPropagation();
+                setActiveItemIndex((prev) => Math.max(0, prev - 1));
+              }}
+              className="pointer-events-auto p-2 rounded-full bg-black/40 backdrop-blur-xl border border-white/10 text-white active:scale-90 transition disabled:opacity-0 shadow-lg"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button
+              type="button"
+              disabled={activeItemIndex === (post.items!.length - 1)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setActiveItemIndex((prev) => Math.min(post.items!.length - 1, prev + 1));
+              }}
+              className="pointer-events-auto p-2 rounded-full bg-black/40 backdrop-blur-xl border border-white/10 text-white active:scale-90 transition disabled:opacity-0 shadow-lg"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Top Floating Page Badge (e.g., 2/6) */}
+          <div className="absolute top-4 right-4 z-20 px-2.5 py-1 rounded-full bg-black/50 backdrop-blur-xl border border-white/10 text-[11px] font-mono text-zinc-200">
+            {activeItemIndex + 1}/{post.items!.length}
+          </div>
+        </>
       )}
 
       {/* Right Side Minimal Action Bar */}

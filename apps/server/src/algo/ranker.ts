@@ -95,6 +95,18 @@ export class FeedRanker {
 
     if (rawPosts.length === 0) return [];
 
+    // Fetch all post items in batch for multi-item posts
+    const allItems = this.db.query(`
+      SELECT * FROM post_items ORDER BY item_index ASC
+    `).all() as any[];
+    const itemsByPost = new Map<string, any[]>();
+    for (const item of allItems) {
+      if (!itemsByPost.has(item.post_id)) {
+        itemsByPost.set(item.post_id, []);
+      }
+      itemsByPost.get(item.post_id)!.push(item);
+    }
+
     // Parse posts and tags
     const candidates: (Post & { tags: Tag[] })[] = rawPosts.map((p) => {
       const tags: Tag[] = p.raw_tags
@@ -115,6 +127,7 @@ export class FeedRanker {
         created_at: p.created_at,
         rating: p.rating,
         tags,
+        items: itemsByPost.get(p.id) || [],
       };
     });
 
