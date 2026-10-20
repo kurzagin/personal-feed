@@ -14,6 +14,15 @@ export interface ImageProcessingOptions {
   quality?: number;
   effort?: number;
   maxDimension?: number;
+  signal?: AbortSignal;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    const err = new Error("Upload aborted");
+    err.name = "AbortError";
+    throw err;
+  }
 }
 
 /**
@@ -24,11 +33,15 @@ export async function processImageToAvif(
   inputBuffer: Buffer,
   options: ImageProcessingOptions = {}
 ): Promise<ProcessedImage> {
-  const { quality = 75, effort = 4, maxDimension = 3840 } = options;
+  const { quality = 75, effort = 4, maxDimension = 3840, signal } = options;
+
+  throwIfAborted(signal);
 
   let pipeline = sharp(inputBuffer, { failOnError: false }).rotate(); // Auto-rotate via EXIF orientation
 
   const metadata = await pipeline.metadata();
+  throwIfAborted(signal);
+
   if (!metadata.width || !metadata.height) {
     throw new Error("Unable to read image dimensions or format unsupported");
   }
@@ -52,6 +65,8 @@ export async function processImageToAvif(
       lossless: false,
     })
     .toBuffer();
+
+  throwIfAborted(signal);
 
   // Get final dimensions
   const finalMeta = await sharp(avifBuffer).metadata();
