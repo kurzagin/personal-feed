@@ -29,9 +29,20 @@ export function initDatabase(dbPath: string = "personal_feed.db"): Database {
     CREATE TABLE IF NOT EXISTS tags (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE NOT NULL,
-      category TEXT NOT NULL
+      category TEXT NOT NULL,
+      post_count INTEGER DEFAULT 0
     );
   `);
+
+  // Ensure post_count column exists for existing DBs
+  try {
+    db.run("ALTER TABLE tags ADD COLUMN post_count INTEGER DEFAULT 0;");
+  } catch {
+    // Column already exists
+  }
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_tags_post_count ON tags(post_count DESC);`);
 
   // Many-to-many relationship
   db.run(`

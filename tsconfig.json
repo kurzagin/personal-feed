@@ -9,6 +9,11 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@personal-feed/crypto": ["packages/crypto/src/index.ts"],
+      "@personal-feed/shared": ["packages/shared/src/index.ts"]
+    }
   }
 }
