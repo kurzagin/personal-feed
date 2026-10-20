@@ -1,17 +1,29 @@
 import { initDatabase } from "./db/schema";
 import { StorageProvider } from "./r2/client";
-import { deriveMasterKey, generateContentKey, wrapContentKey, encryptChunk, CHUNK_SIZE } from "@personal-feed/crypto";
+import { deriveMasterKey, generateContentKey, wrapContentKey, encryptChunk } from "@personal-feed/crypto";
 import { ulid } from "ulid";
 import { createHash } from "node:crypto";
 
-const db = initDatabase();
-const storage = new StorageProvider();
-const masterKey = deriveMasterKey("default-personal-master-passphrase-2026", Buffer.from("personal-salt-constant", "utf-8"));
+const PASSPHRASE = process.env.APP_MASTER_PASSPHRASE;
+const SALT_STR = process.env.APP_MASTER_SALT;
+
+if (!PASSPHRASE || !SALT_STR) {
+  console.error("❌ ERROR: APP_MASTER_PASSPHRASE and APP_MASTER_SALT must be defined in .env to run seed");
+  process.exit(1);
+}
+
+const db = initDatabase(process.env.DATABASE_PATH || "personal_feed.db");
+const storage = new StorageProvider({
+  accountId: process.env.R2_ACCOUNT_ID,
+  accessKeyId: process.env.R2_ACCESS_KEY_ID,
+  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+  bucketName: process.env.R2_BUCKET,
+});
+const masterKey = deriveMasterKey(PASSPHRASE, Buffer.from(SALT_STR, "utf-8"));
 
 async function seed() {
-  console.log("🌱 Seeding Danbooru tags and sample encrypted mock posts...");
+  console.log("🌱 Seeding Danbooru tags and sample encrypted mock posts using .env credentials...");
 
-  // Sample Danbooru tags
   const tags = [
     { name: "genshin_impact", category: "copyright" },
     { name: "raiden_shogun", category: "character" },
@@ -28,32 +40,31 @@ async function seed() {
     db.query("INSERT OR IGNORE INTO tags (name, category) VALUES (?, ?)").run(t.name, t.category);
   }
 
-  // Generate 4 mock posts
   const mockItems = [
     {
       type: "short_video",
-      aspectRatio: 0.5625, // 9:16
+      aspectRatio: 0.5625,
       duration: 15.0,
       tags: ["genshin_impact", "raiden_shogun", "cosplay", "short_clip"],
       content: Buffer.from("MOCK_ENCRYPTED_SHORT_VERTICAL_VIDEO_DATA"),
     },
     {
       type: "long_video",
-      aspectRatio: 1.777, // 16:9
-      duration: 3600.0, // 1 hour
+      aspectRatio: 1.777,
+      duration: 3600.0,
       tags: ["genshin_impact", "landscape"],
       content: Buffer.from("MOCK_ENCRYPTED_LONG_HORIZONTAL_VIDEO_DATA"),
     },
     {
       type: "cosplay_set",
-      aspectRatio: 0.666, // 2:3 portrait
+      aspectRatio: 0.666,
       duration: null,
       tags: ["frieren", "fern", "cosplay"],
       content: Buffer.from("MOCK_ENCRYPTED_COSPLAY_IMAGE_DATA"),
     },
     {
       type: "anime_art",
-      aspectRatio: 0.75, // 3:4 portrait
+      aspectRatio: 0.75,
       duration: null,
       tags: ["frieren", "anime_art", "wlop"],
       content: Buffer.from("MOCK_ENCRYPTED_ANIME_ART_IMAGE_DATA"),
@@ -72,7 +83,7 @@ async function seed() {
     await storage.putEncryptedObject(r2Key, encChunk);
 
     db.query(`
-      INSERT INTO posts (id, media_type, duration_seconds, aspect_ratio, page_count, r2_storage_key, encrypted_key, content_hash, created_at, rating)
+      INSERT OR REPLACE INTO posts (id, media_type, duration_seconds, aspect_ratio, page_count, r2_storage_key, encrypted_key, content_hash, created_at, rating)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'general')
     `).run(postId, item.type, item.duration, item.aspectRatio, 1, r2Key, wrappedKey, hash, Date.now());
 
@@ -84,7 +95,7 @@ async function seed() {
     }
   }
 
-  console.log("✅ Seed completed successfully!");
+  console.log("✅ Seed completed successfully with .env encryption keys!");
 }
 
 seed();
