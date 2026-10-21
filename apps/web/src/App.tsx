@@ -4,6 +4,7 @@ import { FeedCard } from "./components/FeedCard";
 import { UploadView, type ServerProgressSnapshot } from "./components/UploadView";
 import { ExploreView } from "./components/ExploreView";
 import { EditTagsView } from "./components/EditTagsView";
+import { PreferencesView } from "./components/PreferencesView";
 import {
   Home,
   Plus,
@@ -17,6 +18,7 @@ import {
   Sparkles,
   X,
   RefreshCw,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   loadUploadDraft,
@@ -26,13 +28,13 @@ import {
 } from "./lib/uploadDraftStore";
 
 const ACTIVE_TAB_SESSION_KEY = "pf_active_tab";
-type AppTab = "feed" | "explore" | "upload" | "edit-tags";
+type AppTab = "feed" | "explore" | "upload" | "edit-tags" | "preferences";
 
 export const App: React.FC = () => {
   const [tab, setTabState] = useState<AppTab>(() => {
     try {
       const saved = sessionStorage.getItem(ACTIVE_TAB_SESSION_KEY);
-      if (saved === "upload" || saved === "explore") return saved;
+      if (saved === "upload" || saved === "explore" || saved === "preferences") return saved;
       return "feed";
     } catch {
       return "feed";
@@ -349,6 +351,19 @@ export const App: React.FC = () => {
                   {posts.length}
                 </span>
               )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTab("preferences")}
+              className={`flex items-center justify-center lg:justify-start gap-3.5 px-3.5 py-3 rounded-2xl text-xs font-semibold transition cursor-pointer ${
+                tab === "preferences"
+                  ? "bg-white text-black shadow-lg shadow-white/10"
+                  : "text-zinc-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              <SlidersHorizontal className="w-5 h-5 shrink-0" />
+              <span className="hidden lg:inline">Preferences</span>
             </button>
 
             <button
@@ -684,6 +699,19 @@ export const App: React.FC = () => {
             />
           </div>
         )}
+
+        {/* VIEW 5: PREFERENCES & ALGORITHM RESET */}
+        {tab === "preferences" && (
+          <div className="w-full h-full flex-1 overflow-hidden">
+            <PreferencesView
+              onBack={() => setTab("feed")}
+              onAlgorithmReset={() => {
+                fetchFeed();
+                setActiveIndex(0);
+              }}
+            />
+          </div>
+        )}
       </main>
 
       {/* =====================================================================
@@ -711,6 +739,18 @@ export const App: React.FC = () => {
             <span className="text-[10px] font-medium tracking-wider">Feed</span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => setTab("explore")}
+            aria-label="Explore Grid"
+            className={`flex flex-col items-center justify-center gap-1 transition ${
+              tab === "explore" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <Compass className="w-5 h-5 stroke-[2]" />
+            <span className="text-[10px] font-medium tracking-wider">Explore</span>
+          </button>
+
           {/* Center TikTok Plus Action */}
           <button
             type="button"
@@ -727,14 +767,14 @@ export const App: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setTab("explore")}
-            aria-label="Explore Grid"
+            onClick={() => setTab("preferences")}
+            aria-label="Preferences"
             className={`flex flex-col items-center justify-center gap-1 transition ${
-              tab === "explore" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+              tab === "preferences" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            <Compass className="w-5 h-5 stroke-[2]" />
-            <span className="text-[10px] font-medium tracking-wider">Explore</span>
+            <SlidersHorizontal className="w-5 h-5 stroke-[2]" />
+            <span className="text-[10px] font-medium tracking-wider">Settings</span>
           </button>
         </nav>
       )}
