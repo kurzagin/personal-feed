@@ -1,9 +1,13 @@
 import { Database } from "bun:sqlite";
 import type { Post, Tag, TagCategory } from "@personal-feed/shared";
 
-interface ScoredPost {
+interface CandidatePost {
   post: Post & { tags: Tag[] };
-  score: number;
+  vector: Map<number, number>; // tag_id -> tf-idf weight
+  vectorNorm: number;
+  simScore: number;
+  ucbScore: number;
+  finalScore: number;
 }
 
 /**
@@ -27,14 +31,20 @@ export class FeedRanker {
   }
 
   /**
-   * Computes the dynamic user tag affinity vector with exponential time decay.
-   * Half-life is set to 7 days (604,800,000 ms).
+   * Computes the dynamic user tag affinity vector with:
+   * 1. Exponential time decay (7-day half life)
+   * 2. Circadian / Time-of-Day contextual weighting (boosts current browsing time slot)
+   * 3. Intelligent Skip Attribution (protects historically loved tags from fast skips)
+   * 4. Multi-Signal interactions (re-watch loops, gallery swipe depth, audio unmute)
    */
   getUserTagAffinities(): Map<number, number> {
     const affinities = new Map<number, number>();
     const now = Date.now();
     const halfLifeMs = 7 * 24 * 60 * 60 * 1000;
     const lambda = Math.LN2 / halfLifeMs;
+
+    // Current hour of day (0-23) for circadian matching
+    const currentHour = new Date(now).getHours();
 
     // Fetch sessions from the last 30 days
     const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
@@ -46,8 +56,13 @@ export class FeedRanker {
         ws.completion_rate,
         ws.interacted_skipped,
         ws.interacted_dwell_ms,
+        ws.loop_count,
+        ws.carousel_depth,
+        ws.audio_unmuted,
+        p.media_type,
         pt.tag_id
       FROM watch_sessions ws
+      JOIN posts p ON ws.post_id = p.id
       JOIN post_tags pt ON ws.post_id = pt.post_id
       WHERE ws.started_at >= ?
     `).all(thirtyDaysAgo) as Array<{
@@ -57,41 +72,181 @@ export class FeedRanker {
       completion_rate: number;
       interacted_skipped: number;
       interacted_dwell_ms: number | null;
+      loop_count: number | null;
+      carousel_depth: number | null;
+      audio_unmuted: number | null;
+      media_type: string;
       tag_id: number;
     }>;
 
+    // Pass 1: Quick pre-aggregation of raw positive counts to identify established favorite tags
+    const positiveCounts = new Map<number, number>();
     for (const s of sessions) {
-      // Calculate engagement weight:
-      // - Completion >= 1.0 (looping): +3.0 to +4.0
-      // - High dwell time on galleries (>5s): +2.0
-      // - Skipped (<3s): -3.0
+      if (!s.interacted_skipped && (s.completion_rate >= 0.75 || (s.interacted_dwell_ms && s.interacted_dwell_ms > 4000))) {
+        positiveCounts.set(s.tag_id, (positiveCounts.get(s.tag_id) || 0) + 1);
+      }
+    }
+
+    // Pass 2: Calculate calibrated engagement with time-of-day boost and intelligent skip attribution
+    for (const s of sessions) {
       let weight = 0;
+      const isVideo = s.media_type === "short_video" || s.media_type === "long_video";
+
       if (s.interacted_skipped) {
-        weight = -3.0;
-      } else {
+        // Intelligent Skip Attribution:
+        // If a user skips a post that contains a tag they have established 3+ positive views on,
+        // do not ruin their affinity for that tag (soft penalty -0.5 instead of -3.0).
+        const establishedPositives = positiveCounts.get(s.tag_id) || 0;
+        if (establishedPositives >= 3) {
+          weight = -0.5; // Soft penalty for established favorite tags
+        } else {
+          weight = -3.0; // Full penalty for unfamiliar / nuisance tags
+        }
+      } else if (isVideo) {
+        // Video signals: completion rate, re-watch loop count, audio unmute
+        const loops = s.loop_count || 0;
         weight += Math.min(s.completion_rate * 2.0, 4.0);
-        if (s.interacted_dwell_ms && s.interacted_dwell_ms > 5000) weight += 2.0;
+        if (loops > 0) {
+          // Strongest signal: user looped the video
+          weight += Math.min(loops * 2.0, 5.0);
+        }
+        if (s.audio_unmuted) {
+          weight += 1.0;
+        }
+      } else {
+        // Image / Carousel signals: dwell time and gallery depth
+        const dwell = s.interacted_dwell_ms || (s.watch_duration_seconds * 1000);
+        if (dwell > 8000) {
+          weight += 4.0;
+        } else if (dwell > 3000) {
+          weight += 2.0;
+        } else {
+          weight += 0.5;
+        }
+
+        // Swiping through multiple slides in a carousel
+        const depth = s.carousel_depth ?? 1.0;
+        if (depth > 0.6) {
+          weight += 1.5;
+        }
       }
 
-      // Exponential decay
+      // Circadian Contextual Alignment:
+      // Sessions started at a similar hour of the day (+- 3 hours) get a 1.25x affinity multiplier
+      const sessionHour = new Date(s.started_at).getHours();
+      const hourDiff = Math.abs(currentHour - sessionHour);
+      const isCircadianMatch = hourDiff <= 3 || hourDiff >= 21;
+      const circadianFactor = isCircadianMatch ? 1.25 : 1.0;
+
+      // Exponential time decay
       const ageMs = Math.max(0, now - s.started_at);
-      const decayedWeight = weight * Math.exp(-lambda * ageMs);
+      const decayedWeight = weight * circadianFactor * Math.exp(-lambda * ageMs);
 
       const current = affinities.get(s.tag_id) || 0;
       affinities.set(s.tag_id, current + decayedWeight);
     }
 
-    return affinities;
+    // 3. Tag Co-occurrence Graph Propagation (Associative Recommendations)
+    // If user has high affinity for Tag A, diffuse 15% of that signal to frequently co-occurring Tag B
+    const propagatedAffinities = this.propagateTagCoOccurrences(affinities);
+
+    return propagatedAffinities;
   }
 
   /**
-   * Generates a ranked batch of feed items.
+   * Precomputes pairwise co-occurrence between tags and propagates affinity signals.
+   * Enables recommending items with related tags even before the user has directly encountered them.
+   */
+  private propagateTagCoOccurrences(rawAffinities: Map<number, number>): Map<number, number> {
+    const result = new Map<number, number>(rawAffinities);
+    if (rawAffinities.size === 0) return result;
+
+    // Build co-occurrence table in memory (fast across post_tags)
+    const postTagRows = this.db.query(`
+      SELECT post_id, tag_id FROM post_tags
+    `).all() as Array<{ post_id: string; tag_id: number }>;
+
+    const tagsByPost = new Map<string, number[]>();
+    for (const row of postTagRows) {
+      if (!tagsByPost.has(row.post_id)) {
+        tagsByPost.set(row.post_id, []);
+      }
+      tagsByPost.get(row.post_id)!.push(row.tag_id);
+    }
+
+    // Calculate co-occurrence frequency between pairs
+    const coOccurrences = new Map<number, Map<number, number>>();
+    for (const tags of tagsByPost.values()) {
+      if (tags.length < 2) continue;
+      for (let i = 0; i < tags.length; i++) {
+        for (let j = i + 1; j < tags.length; j++) {
+          const t1 = tags[i];
+          const t2 = tags[j];
+
+          if (!coOccurrences.has(t1)) coOccurrences.set(t1, new Map());
+          if (!coOccurrences.has(t2)) coOccurrences.set(t2, new Map());
+
+          const map1 = coOccurrences.get(t1)!;
+          map1.set(t2, (map1.get(t2) || 0) + 1);
+
+          const map2 = coOccurrences.get(t2)!;
+          map2.set(t1, (map2.get(t1) || 0) + 1);
+        }
+      }
+    }
+
+    // Diffuse a portion of positive affinity to co-occurring neighbor tags
+    for (const [tagId, aff] of rawAffinities.entries()) {
+      if (aff <= 1.0) continue; // Only propagate positive preferences
+      const neighbors = coOccurrences.get(tagId);
+      if (!neighbors) continue;
+
+      for (const [neighborId, count] of neighbors.entries()) {
+        if (count >= 2) {
+          // Transfer 15% normalized by co-occurrence strength
+          const transferWeight = Math.min(0.15 * aff * (count / 5), 0.25 * aff);
+          const current = result.get(neighborId) || 0;
+          result.set(neighborId, current + transferWeight);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Calculates Inverse Document Frequency (IDF) for all tags in the database:
+   * IDF(t) = ln(1 + (Total_Posts / (Tag_Post_Count + 1)))
+   * Dampens overly common tags (e.g. '1girl', 'solo') while elevating rare, high-intent tags.
+   */
+  private getTagIdfMap(totalPosts: number): Map<number, number> {
+    const idfMap = new Map<number, number>();
+    const tagCounts = this.db.query(`
+      SELECT t.id, COALESCE(t.post_count, count(pt.post_id)) as actual_count
+      FROM tags t
+      LEFT JOIN post_tags pt ON t.id = pt.tag_id
+      GROUP BY t.id
+    `).all() as Array<{ id: number; actual_count: number }>;
+
+    for (const row of tagCounts) {
+      const count = Math.max(1, row.actual_count);
+      const idf = Math.log(1 + (totalPosts / count));
+      idfMap.set(row.id, idf);
+    }
+
+    return idfMap;
+  }
+
+  /**
+   * Two-Stage Feed Retrieval & Re-ranking:
+   * Stage 1 (Retrieval): Indexed candidate selection (top user tags + fresh unviewed posts)
+   * Stage 2 (Scoring & Re-ranking): Vector Cosine similarity + UCB1 + MMR Diversity
    */
   getRankedFeed(limit: number = 15): (Post & { tags: Tag[] })[] {
     const now = Date.now();
     const tagAffinities = this.getUserTagAffinities();
 
-    // 1. Retrieve all candidate posts
+    // Stage 1: Candidate Generation (Fetch candidates with tag aggregation)
     const rawPosts = this.db.query(`
       SELECT 
         p.*,
@@ -104,7 +259,10 @@ export class FeedRanker {
 
     if (rawPosts.length === 0) return [];
 
-    // Fetch all post items in batch for multi-item posts
+    const totalPosts = rawPosts.length;
+    const tagIdf = this.getTagIdfMap(totalPosts);
+
+    // Fetch multi-item carousel items in batch
     const allItems = this.db.query(`
       SELECT * FROM post_items ORDER BY item_index ASC
     `).all() as any[];
@@ -116,106 +274,199 @@ export class FeedRanker {
       itemsByPost.get(item.post_id)!.push(item);
     }
 
-    // Parse posts and tags
-    const candidates: (Post & { tags: Tag[] })[] = rawPosts.map((p) => {
+    // Exposure and fatigue history
+    const recentViews = new Map<string, number>();
+    const impressions = new Map<string, number>();
+    const views = this.db.query(`
+      SELECT post_id, COUNT(*) as view_count, MAX(started_at) as last_seen
+      FROM watch_sessions
+      GROUP BY post_id
+    `).all() as Array<{ post_id: string; view_count: number; last_seen: number }>;
+
+    let totalSessions = 0;
+    for (const v of views) {
+      recentViews.set(v.post_id, v.last_seen);
+      impressions.set(v.post_id, v.view_count);
+      totalSessions += v.view_count;
+    }
+    const logTotalSessions = Math.log(Math.max(1, totalSessions));
+
+    // Build normalized user vector
+    let userNormSq = 0;
+    const userVector = new Map<number, number>();
+    for (const [tagId, rawAff] of tagAffinities.entries()) {
+      if (rawAff <= 0) continue;
+      const idf = tagIdf.get(tagId) ?? 1.0;
+      const w = rawAff * idf;
+      userVector.set(tagId, w);
+      userNormSq += w * w;
+    }
+    const userNorm = Math.sqrt(userNormSq);
+
+    // Stage 2: Vectorize candidate posts and compute scores
+    const candidates: CandidatePost[] = rawPosts.map((p) => {
       const tags: Tag[] = p.raw_tags
         ? p.raw_tags.split(";").map((str: string) => {
             const [id, name, category] = str.split(":");
-            return { id: Number(id), name, category: category as any };
+            return { id: Number(id), name, category: category as TagCategory };
           })
         : [];
-      return {
-        id: p.id,
-        media_type: p.media_type,
-        duration_seconds: p.duration_seconds,
-        aspect_ratio: p.aspect_ratio,
-        page_count: p.page_count,
-        r2_storage_key: p.r2_storage_key,
-        encrypted_key: p.encrypted_key,
-        content_hash: p.content_hash,
-        created_at: p.created_at,
-        rating: p.rating,
-        hls_segment_count: p.hls_segment_count,
-        has_scrub_sheet: Boolean(p.has_scrub_sheet),
-        has_thumbnail_grid: Boolean(p.has_thumbnail_grid),
-        tags,
-        items: itemsByPost.get(p.id) || [],
-      };
-    });
 
-    // 2. Fetch recent view history for fatigue calculation
-    const recentViews = new Map<string, number>();
-    const views = this.db.query(`
-      SELECT post_id, MAX(started_at) as last_seen
-      FROM watch_sessions
-      GROUP BY post_id
-    `).all() as Array<{ post_id: string; last_seen: number }>;
-    for (const v of views) {
-      recentViews.set(v.post_id, v.last_seen);
-    }
-
-    // 3. Score each candidate
-    const scored: ScoredPost[] = candidates.map((post) => {
-      let score = 0;
-
-      // A. Category-Weighted Tag Affinity Score
-      let tagScore = 0;
-      for (const t of post.tags) {
-        const rawAffinity = tagAffinities.get(t.id) || 0;
-        const weight = CATEGORY_WEIGHTS[t.category] ?? 1.0;
-        tagScore += rawAffinity * weight;
+      // Build post TF-IDF vector with category weighting
+      const vector = new Map<number, number>();
+      let postNormSq = 0;
+      for (const t of tags) {
+        const catWeight = CATEGORY_WEIGHTS[t.category] ?? 1.0;
+        const idf = tagIdf.get(t.id) ?? 1.0;
+        const weight = catWeight * idf;
+        vector.set(t.id, weight);
+        postNormSq += weight * weight;
       }
-      score += tagScore;
+      const postNorm = Math.sqrt(postNormSq);
 
-      // B. Fatigue Penalty (seen recently)
-      const lastSeen = recentViews.get(post.id);
+      // A. Cosine Similarity with User Profile
+      let simScore = 0;
+      if (userNorm > 0 && postNorm > 0) {
+        let dotProduct = 0;
+        for (const [tagId, postWeight] of vector.entries()) {
+          const uWeight = userVector.get(tagId);
+          if (uWeight !== undefined) {
+            dotProduct += uWeight * postWeight;
+          }
+        }
+        simScore = (dotProduct / (userNorm * postNorm)) * 10;
+      }
+
+      // B. UCB1 Exploration Bonus for Under-explored items
+      const postViews = impressions.get(p.id) || 0;
+      const explorationFactor = 2.5;
+      const ucbScore = Math.min(
+        explorationFactor * Math.sqrt(logTotalSessions / (postViews + 1)),
+        8.0
+      );
+
+      // C. Fatigue Penalties
+      let fatiguePenalty = 0;
+      const lastSeen = recentViews.get(p.id);
       if (lastSeen) {
         const hoursAgo = (now - lastSeen) / (1000 * 60 * 60);
         if (hoursAgo < 6) {
-          score -= 100; // Hard fatigue (avoid seeing in same session)
-        } else if (hoursAgo < 48) {
-          score -= 20;
+          fatiguePenalty = 100;
+        } else if (hoursAgo < 24) {
+          fatiguePenalty = 30;
+        } else if (hoursAgo < 72) {
+          fatiguePenalty = 10;
         } else if (hoursAgo < 168) {
-          score -= 5;
+          fatiguePenalty = 3;
         }
-      } else {
-        // Fresh exploration bonus for never-before-seen content
-        score += 5.0;
       }
 
-      // C. Exploration jitter (prevents deterministic ordering)
-      score += (Math.random() - 0.5) * 2.0;
+      const jitter = (Math.random() - 0.5) * 0.4;
+      const finalScore = simScore + ucbScore - fatiguePenalty + jitter;
 
-      return { post, score };
+      return {
+        post: {
+          id: p.id,
+          media_type: p.media_type,
+          duration_seconds: p.duration_seconds,
+          aspect_ratio: p.aspect_ratio,
+          page_count: p.page_count,
+          r2_storage_key: p.r2_storage_key,
+          encrypted_key: p.encrypted_key,
+          content_hash: p.content_hash,
+          created_at: p.created_at,
+          rating: p.rating,
+          hls_segment_count: p.hls_segment_count,
+          has_scrub_sheet: Boolean(p.has_scrub_sheet),
+          has_thumbnail_grid: Boolean(p.has_thumbnail_grid),
+          tags,
+          items: itemsByPost.get(p.id) || [],
+        },
+        vector,
+        vectorNorm: postNorm,
+        simScore,
+        ucbScore,
+        finalScore,
+      };
     });
 
-    // Sort descending by score
-    scored.sort((a, b) => b.score - a.score);
+    // Stage 3: MMR Semantic Diversity & Format Interleaving Selection
+    return this.selectDiverseBatch(candidates, limit);
+  }
 
-    // 4. Format Interleaving (Avoid 3 consecutive long videos)
-    const result: (Post & { tags: Tag[] })[] = [];
-    const pool = [...scored];
+  /**
+   * Computes cosine similarity between two post vectors.
+   */
+  private computeItemSimilarity(a: CandidatePost, b: CandidatePost): number {
+    if (a.vectorNorm === 0 || b.vectorNorm === 0) return 0;
+    let dot = 0;
+    const [small, large] = a.vector.size < b.vector.size ? [a.vector, b.vector] : [b.vector, a.vector];
+    for (const [tagId, val] of small.entries()) {
+      const otherVal = large.get(tagId);
+      if (otherVal !== undefined) {
+        dot += val * otherVal;
+      }
+    }
+    return dot / (a.vectorNorm * b.vectorNorm);
+  }
+
+  /**
+   * Greedy MMR Selection:
+   * MMR = lambda * Score(item) - (1 - lambda) * max_{selected} Sim(item, selected)
+   * Prevents clustering of identical characters/artists while keeping quality high.
+   */
+  private selectDiverseBatch(
+    candidates: CandidatePost[],
+    limit: number
+  ): (Post & { tags: Tag[] })[] {
+    const pool = [...candidates].sort((a, b) => b.finalScore - a.finalScore);
+    const selected: CandidatePost[] = [];
+    const lambda = 0.72;
     let consecutiveLongVideos = 0;
 
-    while (pool.length > 0 && result.length < limit) {
-      const idx = pool.findIndex((item) => {
+    while (pool.length > 0 && selected.length < limit) {
+      let bestIdx = -1;
+      let bestMMRScore = -Infinity;
+
+      for (let i = 0; i < pool.length; i++) {
+        const item = pool[i];
+
         const isLong = item.post.media_type === "long_video";
         if (consecutiveLongVideos >= 2 && isLong) {
-          return false; // Skip if already too many long videos in a row
+          continue;
         }
-        return true;
-      });
 
-      const selected = idx !== -1 ? pool.splice(idx, 1)[0] : pool.shift()!;
-      if (selected.post.media_type === "long_video") {
+        let maxSimilarity = 0;
+        for (const s of selected) {
+          const sim = this.computeItemSimilarity(item, s);
+          if (sim > maxSimilarity) {
+            maxSimilarity = sim;
+          }
+        }
+
+        const redundancyPenalty = (1 - lambda) * (maxSimilarity * 8.0);
+        const mmr = lambda * item.finalScore - redundancyPenalty;
+
+        if (mmr > bestMMRScore) {
+          bestMMRScore = mmr;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx === -1) {
+        bestIdx = 0;
+      }
+
+      const picked = pool.splice(bestIdx, 1)[0];
+      selected.push(picked);
+
+      if (picked.post.media_type === "long_video") {
         consecutiveLongVideos++;
       } else {
         consecutiveLongVideos = 0;
       }
-
-      result.push(selected.post);
     }
 
-    return result;
+    return selected.map((s) => s.post);
   }
 }

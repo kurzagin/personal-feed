@@ -26,6 +26,9 @@ interface FeedCardProps {
     completion: number;
     skipped: boolean;
     dwellMs?: number;
+    loopCount?: number;
+    carouselDepth?: number;
+    audioUnmuted?: boolean;
   }) => void;
 }
 
@@ -58,6 +61,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({
 
   const startTimeRef = useRef<number>(Date.now());
   const loopCountRef = useRef<number>(0);
+  const maxItemIndexReachedRef = useRef<number>(0);
 
   // Touch & gesture refs
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -98,6 +102,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({
     setDuration(itemDur || 0);
     setCurrentTime(0);
     setNaturalAspectRatio(null);
+    maxItemIndexReachedRef.current = Math.max(maxItemIndexReachedRef.current, activeItemIndex);
   }, [activeItemIndex, currentItem, post.duration_seconds]);
 
   // Initialize HLS / native video playback
@@ -150,6 +155,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({
     if (isActive) {
       startTimeRef.current = Date.now();
       loopCountRef.current = 0;
+      maxItemIndexReachedRef.current = 0;
       if (isVideo && videoRef.current) {
         videoRef.current.currentTime = 0;
         videoRef.current.playbackRate = 1.0;
@@ -169,17 +175,22 @@ export const FeedCard: React.FC<FeedCardProps> = ({
         const totalDuration = duration || 10;
         const completion = elapsedSec / totalDuration + loopCountRef.current;
         const skipped = elapsedSec < 2.5;
+        const carouselDepth = totalItemsCount > 1
+          ? (maxItemIndexReachedRef.current + 1) / totalItemsCount
+          : 1.0;
 
         onRecordSession({
           duration: elapsedSec,
           completion,
           skipped,
           dwellMs: !isVideo ? Date.now() - startTimeRef.current : undefined,
+          loopCount: loopCountRef.current,
+          carouselDepth,
+          audioUnmuted: !isMuted,
         });
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, activeItemIndex, isVideo]);
+  }, [isActive, isVideo, duration, onRecordSession, isMuted, totalItemsCount]);
 
   const togglePlay = useCallback(() => {
     if (videoRef.current) {

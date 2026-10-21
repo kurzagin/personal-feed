@@ -98,12 +98,20 @@ export function initDatabase(dbPath: string = "personal_feed.db"): Database {
       completion_rate REAL NOT NULL,
       interacted_skipped INTEGER DEFAULT 0,
       interacted_dwell_ms INTEGER,
-      last_position_seconds REAL
+      last_position_seconds REAL,
+      loop_count INTEGER DEFAULT 0,
+      carousel_depth REAL DEFAULT 1.0,
+      audio_unmuted INTEGER DEFAULT 0
     );
   `);
 
+  try { db.run("ALTER TABLE watch_sessions ADD COLUMN loop_count INTEGER DEFAULT 0;"); } catch {}
+  try { db.run("ALTER TABLE watch_sessions ADD COLUMN carousel_depth REAL DEFAULT 1.0;"); } catch {}
+  try { db.run("ALTER TABLE watch_sessions ADD COLUMN audio_unmuted INTEGER DEFAULT 0;"); } catch {}
+
   db.run(`CREATE INDEX IF NOT EXISTS idx_watch_sessions_post ON watch_sessions(post_id);`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_watch_sessions_time ON watch_sessions(started_at);`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_watch_sessions_post_started ON watch_sessions(post_id, started_at DESC);`);
 
   return db;
 }

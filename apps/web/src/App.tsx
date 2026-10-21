@@ -259,6 +259,9 @@ export const App: React.FC = () => {
       completion: number;
       skipped: boolean;
       dwellMs?: number;
+      loopCount?: number;
+      carouselDepth?: number;
+      audioUnmuted?: boolean;
     }
   ) => {
     try {
@@ -271,6 +274,9 @@ export const App: React.FC = () => {
           completionRate: stats.completion,
           interactedSkipped: stats.skipped,
           interactedDwellMs: stats.dwellMs,
+          loopCount: stats.loopCount,
+          carouselDepth: stats.carouselDepth,
+          audioUnmuted: stats.audioUnmuted,
         }),
       });
     } catch (err) {
