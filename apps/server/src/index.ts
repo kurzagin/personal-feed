@@ -40,7 +40,7 @@ export const app = new Elysia()
   .use(cors())
   .get("/health", () => ({ status: "ok", timestamp: Date.now() }))
   .use(createMediaRoutes(db, storage, masterKey))
-  .use(createFeedRoutes(db, ranker))
+  .use(createFeedRoutes(db, ranker, storage, masterKey))
   .use(createUploadRoutes(db, storage, masterKey))
   .get("/", ({ set }) => {
     const indexPath = join(distDir, "index.html");

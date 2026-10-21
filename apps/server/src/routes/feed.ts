@@ -1,9 +1,55 @@
 import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import { FeedRanker } from "../algo/ranker";
+import { StorageProvider } from "../r2/client";
+import { runStorageAudit } from "../services/audit";
+import { repairPostVideo } from "../services/repair";
 
-export function createFeedRoutes(db: Database, ranker: FeedRanker) {
+export function createFeedRoutes(
+  db: Database,
+  ranker: FeedRanker,
+  storage?: StorageProvider,
+  masterKey?: Buffer
+) {
   return new Elysia({ prefix: "/api" })
+    .get("/storage/audit", async () => {
+      if (!storage) {
+        return { error: "Storage not configured" };
+      }
+      const report = await runStorageAudit(db, storage);
+      return report;
+    })
+    .post("/storage/repair-video", async ({ body }) => {
+      const { postId } = body;
+      if (!storage || !masterKey) {
+        return { success: false, message: "Storage or master key unavailable" };
+      }
+      try {
+        const result = await repairPostVideo(postId, db, storage, masterKey);
+        return result;
+      } catch (err: any) {
+        return { success: false, message: err?.message || "Repair failed" };
+      }
+    }, {
+      body: t.Object({
+        postId: t.String(),
+      })
+    })
+    .post("/storage/cleanup-orphans", async ({ body }) => {
+      if (!storage) {
+        return { success: false, message: "Storage not configured" };
+      }
+      const { keys } = body;
+      if (!keys || keys.length === 0) {
+        return { success: true, count: 0 };
+      }
+      await storage.deleteEncryptedObjects(keys);
+      return { success: true, count: keys.length };
+    }, {
+      body: t.Object({
+        keys: t.Array(t.String()),
+      })
+    })
     .get("/feed", ({ query }) => {
       const limit = query.limit ? parseInt(query.limit, 10) : 10;
       const items = ranker.getRankedFeed(limit);
