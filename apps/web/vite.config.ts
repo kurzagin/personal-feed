@@ -21,6 +21,17 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:3001",
         changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
+        configure: (proxy) => {
+          proxy.on("error", (err, _req, _res) => {
+            // Suppress noisy EPIPE or ECONNRESET logs when client aborts or resets upload streams
+            if ((err as any).code === "EPIPE" || (err as any).code === "ECONNRESET") {
+              return;
+            }
+            console.error("[vite proxy error]", err.message);
+          });
+        },
       },
     },
   },

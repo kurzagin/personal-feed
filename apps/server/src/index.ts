@@ -61,7 +61,10 @@ export const app = new Elysia()
     set.headers["Content-Type"] = "text/css; charset=utf-8";
     return existsSync(cssPath) ? readFileSync(cssPath, "utf-8") : "";
   })
-  .listen(port);
+  .listen({
+    port,
+    maxRequestBodySize: 1024 * 1024 * 1024 * 2, // 2GB limit for multi-file / large video uploads
+  });
 
 console.log(`Personal Feed Daemon & Web UI live at http://localhost:${port}`);
 
