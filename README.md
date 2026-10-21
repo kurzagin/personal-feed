@@ -58,3 +58,24 @@ export APP_MASTER_SALT="your-unique-salt-constant"
 bun dev:server
 ```
 The server daemon and web client will be live at `http://localhost:3001`.
+
+---
+
+## Database Sync & Migration Across Devices
+
+You can safely sync or migrate your SQLite database to another device via Cloudflare R2 with full zero-knowledge encryption (AES-256-GCM).
+
+### Push Database (Current Device)
+Creates a consistent snapshot (WAL checkpointed via `VACUUM INTO`), encrypts it with your master key, and uploads it to R2:
+```bash
+bun run db:push
+```
+
+### Pull Database (New Device)
+Downloads the encrypted backup from R2, verifies cryptographic integrity with your master key, runs SQLite integrity checks, and restores `personal_feed.db` (automatically backing up any existing local copy first):
+```bash
+bun run db:pull
+```
+
+> **Note**: Both devices must share the same `APP_MASTER_PASSPHRASE` and `APP_MASTER_SALT` in `.env.local` to decrypt the database.
+
