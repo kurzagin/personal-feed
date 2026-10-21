@@ -242,7 +242,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
         )}
       </div>
 
-      {/* Responsive Masonry / Bento Grid */}
+      {/* Responsive Masonry Grid */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-4 pb-24 md:px-8 md:py-6 md:pb-8">
         <div className="max-w-7xl mx-auto w-full">
           {filteredEntries.length === 0 ? (
@@ -268,7 +268,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-4">
+            <div className="columns-2 sm:columns-3 md:columns-4 lg:columns-5 gap-3 md:gap-4 space-y-3 md:space-y-4">
               {filteredEntries.map(({ post, originalIndex }) => {
                 const firstItem = post.items && post.items.length > 0 ? post.items[0] : null;
                 const activeId = firstItem ? firstItem.id : post.id;
@@ -277,6 +277,11 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                   : post.media_type === "video" || post.media_type.includes("video");
                 const itemCount = post.items?.length || post.page_count || 1;
                 const duration = firstItem ? firstItem.duration_seconds : post.duration_seconds;
+                const rawAspect = firstItem ? firstItem.aspect_ratio : post.aspect_ratio;
+                // Clamp aspect ratio to sensible visual bounds so extreme banners or tall strips don't look distorted
+                const aspectRatio = rawAspect && !isNaN(rawAspect) && rawAspect > 0
+                  ? Math.min(Math.max(rawAspect, 0.45), 2.2)
+                  : 3 / 4;
 
                 // Use thumbnail-grid if available or fallback to stream for images
                 const thumbUrl = isVideo
@@ -289,7 +294,8 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                   <div
                     key={post.id}
                     onClick={() => onSelectPost(originalIndex)}
-                    className="group relative aspect-[3/4] rounded-2xl overflow-hidden bg-zinc-900 border border-white/10 hover:border-cyan-400/50 cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-cyan-500/10"
+                    style={{ aspectRatio: `${aspectRatio}` }}
+                    className="break-inside-avoid relative w-full rounded-2xl overflow-hidden bg-zinc-900 border border-white/10 hover:border-cyan-400/50 cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-cyan-500/10 group"
                   >
                     <img
                       src={thumbUrl}
@@ -299,10 +305,10 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                     />
 
                     {/* Subtle Gradient Overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent opacity-80 group-hover:opacity-95 transition-opacity" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent opacity-80 group-hover:opacity-95 transition-opacity pointer-events-none" />
 
                     {/* Top Right Badges (Video duration or Multi-item count) */}
-                    <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
+                    <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 z-10 pointer-events-none">
                       {itemCount > 1 && (
                         <div className="px-2 py-0.5 rounded-full bg-black/65 backdrop-blur-md border border-white/15 text-[10px] font-mono text-white flex items-center gap-1">
                           <Layers className="w-3 h-3 text-cyan-400" />
@@ -318,25 +324,26 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                     </div>
 
                     {/* Bottom Tags Preview */}
-                    <div className="absolute inset-x-2.5 bottom-2.5 flex flex-col gap-1">
+                    <div className="absolute inset-x-2.5 bottom-2.5 flex flex-col gap-1 z-10">
                       {post.tags && post.tags.length > 0 ? (
                         <div className="flex flex-wrap gap-1 max-h-11 overflow-hidden">
                           {post.tags.slice(0, 3).map((t) => {
                             const colors =
                               TagCategoryColors[t.category] || TagCategoryColors.general;
                             return (
-                              <span
+                              <button
                                 key={t.id || t.name}
+                                type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onChangeTagFilter(
                                     activeTagFilter === t.name ? null : t.name
                                   );
                                 }}
-                                className={`text-[10px] px-1.5 py-0.5 rounded-md border backdrop-blur-md truncate max-w-[110px] ${colors.bg} ${colors.text} ${colors.border} hover:brightness-125`}
+                                className={`text-[10px] px-1.5 py-0.5 rounded-md border backdrop-blur-md truncate max-w-[110px] ${colors.bg} ${colors.text} ${colors.border} hover:brightness-125 transition-transform active:scale-95`}
                               >
                                 #{t.name}
-                              </span>
+                              </button>
                             );
                           })}
                           {post.tags.length > 3 && (
