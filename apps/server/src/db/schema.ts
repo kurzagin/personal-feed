@@ -96,7 +96,6 @@ export function initDatabase(dbPath: string = "personal_feed.db"): Database {
       started_at INTEGER NOT NULL,
       watch_duration_seconds REAL NOT NULL,
       completion_rate REAL NOT NULL,
-      interacted_favorite INTEGER DEFAULT 0,
       interacted_skipped INTEGER DEFAULT 0,
       interacted_dwell_ms INTEGER,
       last_position_seconds REAL

@@ -31,7 +31,6 @@ export class FeedRanker {
         ws.started_at,
         ws.watch_duration_seconds,
         ws.completion_rate,
-        ws.interacted_favorite,
         ws.interacted_skipped,
         ws.interacted_dwell_ms,
         pt.tag_id
@@ -43,7 +42,6 @@ export class FeedRanker {
       started_at: number;
       watch_duration_seconds: number;
       completion_rate: number;
-      interacted_favorite: number;
       interacted_skipped: number;
       interacted_dwell_ms: number | null;
       tag_id: number;
@@ -51,8 +49,7 @@ export class FeedRanker {
 
     for (const s of sessions) {
       // Calculate engagement weight:
-      // - Completion >= 1.0 (looping): +3.0
-      // - Favorited: +4.0
+      // - Completion >= 1.0 (looping): +3.0 to +4.0
       // - High dwell time on galleries (>5s): +2.0
       // - Skipped (<3s): -3.0
       let weight = 0;
@@ -60,7 +57,6 @@ export class FeedRanker {
         weight = -3.0;
       } else {
         weight += Math.min(s.completion_rate * 2.0, 4.0);
-        if (s.interacted_favorite) weight += 4.0;
         if (s.interacted_dwell_ms && s.interacted_dwell_ms > 5000) weight += 2.0;
       }
 

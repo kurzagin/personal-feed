@@ -102,7 +102,6 @@ export function createFeedRoutes(
         postId,
         watchDurationSeconds,
         completionRate,
-        interactedFavorite,
         interactedSkipped,
         interactedDwellMs,
         lastPositionSeconds,
@@ -114,15 +113,14 @@ export function createFeedRoutes(
       db.query(`
         INSERT INTO watch_sessions (
           id, post_id, started_at, watch_duration_seconds, completion_rate,
-          interacted_favorite, interacted_skipped, interacted_dwell_ms, last_position_seconds
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          interacted_skipped, interacted_dwell_ms, last_position_seconds
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         sessionId,
         postId,
         now,
         watchDurationSeconds,
         completionRate,
-        interactedFavorite ? 1 : 0,
         interactedSkipped ? 1 : 0,
         interactedDwellMs || null,
         lastPositionSeconds || null
@@ -134,7 +132,6 @@ export function createFeedRoutes(
         postId: t.String(),
         watchDurationSeconds: t.Number(),
         completionRate: t.Number(),
-        interactedFavorite: t.Boolean(),
         interactedSkipped: t.Boolean(),
         interactedDwellMs: t.Optional(t.Number()),
         lastPositionSeconds: t.Optional(t.Number()),
