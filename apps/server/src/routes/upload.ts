@@ -812,5 +812,66 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
         rating: t.Optional(t.String()),
         tags: t.Optional(t.Any()),
       })
+    })
+    .put("/posts/:id/tags", ({ params, body, set }) => {
+      const postId = params.id;
+      const post = db.query("SELECT id FROM posts WHERE id = ?").get(postId);
+      if (!post) {
+        set.status = 404;
+        return { error: "Post not found" };
+      }
+
+      const rawTags: Array<{ name: string; category?: TagCategory }> = body.tags || [];
+
+      const updateTagsTx = db.transaction(() => {
+        // Clear existing post tags
+        db.query("DELETE FROM post_tags WHERE post_id = ?").run(postId);
+
+        for (const t of rawTags) {
+          const tagName = t.name.trim().toLowerCase().replace(/\s+/g, "_");
+          if (!tagName) continue;
+
+          let tag = db
+            .query("SELECT id, category FROM tags WHERE name = ?")
+            .get(tagName) as any;
+
+          if (!tag) {
+            const category = t.category || "general";
+            db.query("INSERT INTO tags (name, category) VALUES (?, ?)").run(
+              tagName,
+              category
+            );
+            tag = db
+              .query("SELECT id, category FROM tags WHERE name = ?")
+              .get(tagName) as any;
+          }
+
+          db.query(
+            "INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)"
+          ).run(postId, tag.id);
+        }
+      });
+
+      updateTagsTx();
+
+      const updatedTags = db.query(`
+        SELECT t.id, t.name, t.category
+        FROM tags t
+        JOIN post_tags pt ON pt.tag_id = t.id
+        WHERE pt.post_id = ?
+        ORDER BY t.name ASC
+      `).all(postId) as Array<{ id: number; name: string; category: TagCategory }>;
+
+      return { success: true, tags: updatedTags };
+    }, {
+      params: t.Object({
+        id: t.String(),
+      }),
+      body: t.Object({
+        tags: t.Array(t.Object({
+          name: t.String(),
+          category: t.Optional(t.String()),
+        })),
+      }),
     });
 }
