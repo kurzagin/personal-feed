@@ -680,10 +680,14 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
         : [];
       const rating = body.rating || "general";
       let rawTags: Array<{ name: string; category: TagCategory }> = [];
-      try {
-        rawTags = JSON.parse(body.tags || "[]");
-      } catch {
-        rawTags = [];
+      if (Array.isArray(body.tags)) {
+        rawTags = body.tags;
+      } else if (typeof body.tags === "string") {
+        try {
+          rawTags = JSON.parse(body.tags);
+        } catch {
+          rawTags = [];
+        }
       }
 
       if (rawFiles.length === 0) {
@@ -806,7 +810,7 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
         aspectRatio: t.Optional(t.String()),
         durationSeconds: t.Optional(t.String()),
         rating: t.Optional(t.String()),
-        tags: t.Optional(t.String()),
+        tags: t.Optional(t.Any()),
       })
     });
 }

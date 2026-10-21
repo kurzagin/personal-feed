@@ -13,7 +13,7 @@
     "@elysiajs/cors": "1.2.0",
     "@sinclair/typebox": "^0.34.52",
     "detect-libc": "^2.1.2",
-    "elysia": "1.2.22",
+    "elysia": "^1.4.30",
     "hls.js": "^1.7.3",
     "lucide-react": "^1.59.0",
     "react": "^19.3.1",

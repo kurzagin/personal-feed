@@ -1,2 +1,3 @@
 [install]
 backend = "copyfile"
+install-method = "copy"
