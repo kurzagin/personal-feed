@@ -14,6 +14,7 @@ import {
   Info,
 } from "lucide-react";
 import { StorageAuditCard } from "./StorageAuditCard";
+import { TagDashboardCard } from "./TagDashboardCard";
 
 interface TagAffinity {
   tagId: number;
@@ -256,6 +257,9 @@ export const PreferencesView: React.FC<PreferencesViewProps> = ({
             </div>
           )}
         </div>
+
+        {/* Tag Management & Bulk Reclassification */}
+        <TagDashboardCard onTagsUpdated={fetchStats} />
 
         {/* Storage Integrity & R2 Audit */}
         <StorageAuditCard />

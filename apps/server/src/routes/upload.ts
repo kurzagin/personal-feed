@@ -516,8 +516,41 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
 
   return new Elysia({ prefix: "/api" })
     .get("/tags", ({ query }) => {
-      const q = query.q ? query.q.trim().toLowerCase() : "";
+      let q = query.q ? query.q.trim().toLowerCase() : "";
+      let categoryFilter: string | null = query.category ? query.category.trim().toLowerCase() : null;
+
+      // Also support prefix parsing directly in query if user typed @character:frieren
+      if (!categoryFilter) {
+        if (q.startsWith("@character:") || q.startsWith("ch:")) {
+          categoryFilter = "character";
+          q = q.replace(/^(@character:|ch:)/, "").trim();
+        } else if (q.startsWith("@artist:") || q.startsWith("a:") || q.startsWith("art:")) {
+          categoryFilter = "artist";
+          q = q.replace(/^(@artist:|a:|art:)/, "").trim();
+        } else if (q.startsWith("@copyright:") || q.startsWith("cp:") || q.startsWith("c:")) {
+          categoryFilter = "copyright";
+          q = q.replace(/^(@copyright:|cp:|c:)/, "").trim();
+        } else if (q.startsWith("@meta:") || q.startsWith("m:")) {
+          categoryFilter = "meta";
+          q = q.replace(/^(@meta:|m:)/, "").trim();
+        } else if (q.startsWith("@general:") || q.startsWith("g:")) {
+          categoryFilter = "general";
+          q = q.replace(/^(@general:|g:)/, "").trim();
+        }
+      }
+
       if (!q) {
+        if (categoryFilter) {
+          const topCategoryTags = db.query(`
+            SELECT id, name, category, post_count 
+            FROM tags 
+            WHERE category = ?
+            ORDER BY post_count DESC 
+            LIMIT 25
+          `).all(categoryFilter);
+          return { tags: topCategoryTags };
+        }
+
         const topTags = db.query(`
           SELECT id, name, category, post_count 
           FROM tags 
@@ -525,6 +558,20 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
           LIMIT 25
         `).all();
         return { tags: topTags };
+      }
+
+      if (categoryFilter) {
+        const tags = db.query(`
+          SELECT id, name, category, post_count
+          FROM tags
+          WHERE category = ? AND name LIKE ?
+          ORDER BY 
+            CASE WHEN name LIKE ? THEN 0 ELSE 1 END,
+            post_count DESC,
+            name ASC
+          LIMIT 25
+        `).all(categoryFilter, `%${q}%`, `${q}%`);
+        return { tags };
       }
 
       const tags = db.query(`
@@ -542,6 +589,7 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
     }, {
       query: t.Object({
         q: t.Optional(t.String()),
+        category: t.Optional(t.String()),
       })
     })
     .get("/ingest/active", () => {
@@ -871,6 +919,90 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
         tags: t.Array(t.Object({
           name: t.String(),
           category: t.Optional(t.String()),
+        })),
+      }),
+    })
+    // Get all tags actively used by posts with counts & category breakdown
+    .get("/admin/tags", () => {
+      const activeTags = db.query(`
+        SELECT 
+          t.id, 
+          t.name, 
+          t.category, 
+          count(pt.post_id) as post_count
+        FROM tags t
+        JOIN post_tags pt ON pt.tag_id = t.id
+        GROUP BY t.id
+        ORDER BY t.category ASC, post_count DESC, t.name ASC
+      `).all() as Array<{ id: number; name: string; category: string; post_count: number }>;
+
+      return { tags: activeTags };
+    })
+    // Update a tag's category or name globally across all posts
+    .patch("/admin/tags/:id", ({ params, body, set }) => {
+      const tagId = Number(params.id);
+      const existing = db.query("SELECT id, name, category FROM tags WHERE id = ?").get(tagId) as any;
+      if (!existing) {
+        set.status = 404;
+        return { error: "Tag not found" };
+      }
+
+      const newCategory = body.category ? body.category.trim().toLowerCase() : existing.category;
+      let newName = body.name ? body.name.trim().toLowerCase().replace(/\s+/g, "_") : existing.name;
+
+      // If renaming to an already existing tag, merge post_tags and remove old tag
+      if (newName !== existing.name) {
+        const targetTag = db.query("SELECT id, category FROM tags WHERE name = ? AND id != ?").get(newName, tagId) as any;
+        if (targetTag) {
+          const mergeTx = db.transaction(() => {
+            // Re-point post_tags
+            db.query("INSERT OR IGNORE INTO post_tags (post_id, tag_id) SELECT post_id, ? FROM post_tags WHERE tag_id = ?").run(targetTag.id, tagId);
+            db.query("DELETE FROM post_tags WHERE tag_id = ?").run(tagId);
+            db.query("UPDATE tags SET category = ? WHERE id = ?").run(newCategory, targetTag.id);
+            db.query("DELETE FROM tags WHERE id = ?").run(tagId);
+          });
+          mergeTx();
+          return {
+            success: true,
+            merged: true,
+            tag: { id: targetTag.id, name: newName, category: newCategory },
+          };
+        }
+      }
+
+      db.query("UPDATE tags SET name = ?, category = ? WHERE id = ?").run(newName, newCategory, tagId);
+      return {
+        success: true,
+        merged: false,
+        tag: { id: tagId, name: newName, category: newCategory },
+      };
+    }, {
+      params: t.Object({
+        id: t.String(),
+      }),
+      body: t.Object({
+        category: t.Optional(t.String()),
+        name: t.Optional(t.String()),
+      }),
+    })
+    // Batch update multiple tags at once (e.g. smart convert to character)
+    .post("/admin/tags/batch", ({ body }) => {
+      const updates = body.updates || [];
+      const batchTx = db.transaction(() => {
+        for (const item of updates) {
+          const cat = item.category ? item.category.trim().toLowerCase() : undefined;
+          if (cat && item.id) {
+            db.query("UPDATE tags SET category = ? WHERE id = ?").run(cat, Number(item.id));
+          }
+        }
+      });
+      batchTx();
+      return { success: true, count: updates.length };
+    }, {
+      body: t.Object({
+        updates: t.Array(t.Object({
+          id: t.Number(),
+          category: t.String(),
         })),
       }),
     });
