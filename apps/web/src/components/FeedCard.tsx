@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import type { Post, Tag } from "@personal-feed/shared";
-import { TagCategoryColors } from "@personal-feed/shared";
 import {
   Heart,
   Volume2,
@@ -10,7 +9,6 @@ import {
   ChevronRight,
   Layers,
   Zap,
-  Sparkles,
 } from "lucide-react";
 import Hls from "hls.js";
 
@@ -53,7 +51,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(post.duration_seconds || 0);
   const [isFastForwarding, setIsFastForwarding] = useState<boolean>(false);
-  const [showAllTags, setShowAllTags] = useState<boolean>(false);
   const [heartBursts, setHeartBursts] = useState<HeartBurst[]>([]);
 
   // 1-second scrubbing & desktop hover preview state
@@ -410,9 +407,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
     setScrubPreviewTime(pct * duration);
   };
 
-  const tags = post.tags || [];
-  const displayedTags = showAllTags ? tags : tags.slice(0, 5);
-
   return (
     <div className="feed-item relative w-full h-full flex items-center justify-center bg-black overflow-hidden select-none md:py-4 md:px-6 lg:px-10">
       {/* Ambient background glow for desktop stage & horizontal media */}
@@ -585,13 +579,13 @@ export const FeedCard: React.FC<FeedCardProps> = ({
             </>
           )}
 
-          {/* Bottom Vignette for Tags & Scrubber */}
-          <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-black/90 via-black/45 to-transparent pointer-events-none" />
+          {/* Bottom Vignette for Scrubber */}
+          <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/80 via-black/35 to-transparent pointer-events-none" />
 
           {/* MOBILE ONLY: Right Side Floating Action Bar */}
           <div
             data-no-stage-click
-            className="md:hidden absolute right-3.5 bottom-24 flex flex-col items-center gap-4 z-20"
+            className="md:hidden absolute right-3.5 bottom-20 flex flex-col items-center gap-4 z-20"
           >
             <button
               type="button"
@@ -627,49 +621,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
               </button>
             )}
           </div>
-
-          {/* BOTTOM METADATA OVERLAY (Danbooru Tag Pills) */}
-          {tags.length > 0 && (
-            <div
-              data-no-stage-click
-              className={`absolute inset-x-4 ${
-                isVideo && duration > 0
-                  ? "bottom-24 md:bottom-12"
-                  : "bottom-20 md:bottom-5"
-              } right-16 md:right-4 z-20 flex flex-wrap items-center gap-1.5 pointer-events-auto`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0 mr-0.5 drop-shadow" />
-              {displayedTags.map((t) => {
-                const colors =
-                  TagCategoryColors[t.category] || TagCategoryColors.general;
-                return (
-                  <button
-                    key={t.id || t.name}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTagClick?.(t.name);
-                    }}
-                    className={`text-[11px] px-2.5 py-0.5 rounded-full border backdrop-blur-md transition active:scale-95 ${colors.bg} ${colors.text} ${colors.border} hover:brightness-125`}
-                  >
-                    #{t.name}
-                  </button>
-                );
-              })}
-              {tags.length > 5 && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowAllTags((prev) => !prev);
-                  }}
-                  className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/15 hover:bg-white/25 text-white backdrop-blur-md transition"
-                >
-                  {showAllTags ? "Show less" : `+${tags.length - 5} more`}
-                </button>
-              )}
-            </div>
-          )}
 
           {/* SLEEK BOTTOM SCRUBBER WITH HOVER & TOUCH 1S THUMBNAIL PREVIEW */}
           {isVideo && duration > 0 && (
