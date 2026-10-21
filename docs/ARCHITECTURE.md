@@ -132,47 +132,87 @@ CREATE TABLE watch_sessions (
     started_at INTEGER NOT NULL,
     watch_duration_seconds REAL NOT NULL,
     completion_rate REAL NOT NULL,       -- watch_duration / total_duration (can exceed 1.0 for loops)
-    interacted_favorite INTEGER DEFAULT 0,
     interacted_skipped INTEGER DEFAULT 0,-- Skipped within 2-3 seconds
-    interacted_dwell_ms INTEGER,         -- Gallery viewing time
-    last_position_seconds REAL           -- Resumption pointer for 1h+ videos
+    interacted_dwell_ms INTEGER,         -- Gallery/image viewing time in ms
+    last_position_seconds REAL,          -- Resumption pointer for 1h+ videos
+    loop_count INTEGER DEFAULT 0,        -- Video re-watch loops completed
+    carousel_depth REAL DEFAULT 1.0,     -- Swipe progress through carousel slides (0.0 to 1.0)
+    audio_unmuted INTEGER DEFAULT 0      -- Audio toggle state (1 if user unmuted)
 );
 CREATE INDEX idx_watch_sessions_post ON watch_sessions(post_id);
 CREATE INDEX idx_watch_sessions_time ON watch_sessions(started_at);
+CREATE INDEX idx_watch_sessions_post_started ON watch_sessions(post_id, started_at DESC);
 ```
 
 ---
 
-## 4. The Recommendation Engine (Two-Stage Ranking)
+## 4. The Recommendation Engine (Two-Stage Ranking & Reranking)
 
-Instead of naive random sorting or chronological feeds, the engine computes a dynamic, personalized affinity score for every post.
+Instead of naive random sorting or chronological feeds, the engine computes a dynamic, personalized affinity score for every post using a two-stage retrieval, scoring, and diversity re-ranking pipeline.
 
-### Stage 1: Candidate Retrieval & Filtering
-* Excludes hard-fatigued items (items watched within the last 6 hours).
-* Pulls candidates matching active interest clusters plus an exploratory candidate pool.
+### Stage 1: Candidate Retrieval & Tag IDF Precomputation
+1. Candidates are retrieved with aggregated Danbooru tags.
+2. An **Inverse Document Frequency (IDF)** map is calculated across the catalog:
+   $$\text{IDF}(t) = \ln\left(1 + \frac{N_{\text{total}}}{N_t + 1}\right)$$
+   This dampens overly ubiquitous tags (e.g., `solo`, `1girl`) and elevates high-specificity tags.
+3. Category weight multipliers prioritize high-intent classifications:
+   - `artist`: 3.5×
+   - `character`: 2.5×
+   - `copyright`: 2.0×
+   - `general`: 1.0×
+   - `meta`: 0.5×
 
-### Stage 2: Scoring Formula
+### Stage 2: Dynamic User Affinity Vector & Scoring
+
+#### 1. Dynamic User Tag Affinity with Multi-Signal Interaction
+Sessions from the last 30 days are processed using exponential time decay with a 7-day half-life ($t_{1/2} = 7\text{ days}$, $\lambda = \frac{\ln 2}{7 \times 86400}$):
+
+$$\text{Weight}(s) = \text{Signals}(s) \cdot \text{CircadianBoost}(s) \cdot e^{-\lambda (t_{\text{now}} - t_s)}$$
+
+Where engagement signals $\text{Signals}(s)$ are calibrated by media type:
+* **Videos**:
+  * Completion rate: $\min(\text{completion\_rate} \times 2.0, 4.0)$
+  * Re-watch loops: $+\min(\text{loop\_count} \times 2.0, 5.0)$
+  * Audio unmuted: $+1.0$
+* **Images & Multi-Item Carousels**:
+  * High dwell time: $+4.0$ ($\ge 8\text{s}$), $+2.0$ ($\ge 3\text{s}$), or $+0.5$ baseline
+  * Gallery swipe depth: $+1.5$ (if $\text{carousel\_depth} > 0.6$)
+* **Intelligent Skip Attribution (Fast Skips)**:
+  * If the user previously had $\ge 3$ positive views on this tag: **soft penalty ($-0.5$)** to safeguard established favorites.
+  * If unproven or nuisance tag: **full penalty ($-3.0$)**.
+
+#### 2. Circadian Contextual Alignment
+Sessions logged at a similar hour of the day ($\pm 3\text{ hours}$ from the current client hour) receive a **1.25× multiplier**, aligning recommendations with time-of-day browsing habits.
+
+#### 3. Tag Co-Occurrence Propagation
+Precomputes pairwise co-occurrences between tags across the catalog and diffuses $15\%$ of positive affinity to co-occurring neighbor tags ($\ge 2$ joint occurrences), allowing the feed to anticipate interests before explicit interaction.
+
+#### 4. Candidate Scoring Formula
 For each candidate post $P$:
-$$Score(P) = \sum_{t \in \text{Tags}(P)} \text{Affinity}(t) + \text{ExplorationBonus}(P) - \text{FatiguePenalty}(P) + \text{Jitter}$$
+$$\text{FinalScore}(P) = \text{SimScore}(U, P) + \text{UCBScore}(P) - \text{FatiguePenalty}(P) + \text{Jitter}$$
 
-#### Dynamic Tag Affinity with Exponential Decay
-Given a half-life $t_{1/2} = 7\text{ days}$ ($\lambda = \frac{\ln 2}{7 \times 86400}$):
-$$\text{Affinity}(t) = \sum_{s \in \text{Sessions}(t)} W(s) \cdot e^{-\lambda (t_{now} - t_s)}$$
+* **Cosine Vector Similarity ($\text{SimScore}$)**:
+  Normalized dot product between user vector $U$ and candidate vector $P$ scaled by 10.0:
+  $$\text{SimScore}(U, P) = 10 \times \frac{U \cdot V_P}{\|U\| \|V_P\|}$$
+* **UCB1 Exploration Bonus ($\text{UCBScore}$)**:
+  Bandit algorithm giving unexposed posts a chance to be discovered:
+  $$\text{UCBScore}(P) = \min\left(2.5 \cdot \sqrt{\frac{\ln(\max(1, N_{\text{sessions}}))}{n_P + 1}}, 8.0\right)$$
+* **Multi-Tier Fatigue Damping**:
+  - Seen within 6 hours: $-100.0$ (hard block)
+  - Seen within 24 hours: $-30.0$
+  - Seen within 72 hours: $-10.0$
+  - Seen within 7 days: $-3.0$
+* **Jitter**: Small random perturbation ($\pm 0.2$) to break ties.
 
-Where session weight $W(s)$ is:
-* $\mathbf{+4.0}$ for Favorited (`interacted_favorite = 1`)
-* $\mathbf{+3.0}$ for Looping (`completion_rate \ge 1.0`)
-* $\mathbf{+2.0}$ for High Dwell on Art/Cosplay (`dwell_ms > 5000`)
-* $\mathbf{-3.0}$ for Quick Skip (`duration < 3.0s`)
+---
 
-#### Fatigue Damping
-* Seen within 6 hours: $-100.0$ (hard block)
-* Seen within 48 hours: $-20.0$
-* Seen within 7 days: $-5.0$
-* Never seen: $+5.0$ (fresh discovery bonus)
+### Stage 3: MMR Diversity Reranking & Format Interleaving
 
-#### Format Interleaving
-* Ensures long videos (>3 min to 1h+) do not cluster consecutively; limits long formats to at most 1 every 3 feed items.
+To prevent clustering of identical characters or artists, a **Maximal Marginal Relevance (MMR)** greedy selection with $\lambda = 0.72$ is applied:
+
+$$\text{MMR}(P) = \lambda \cdot \text{FinalScore}(P) - (1 - \lambda) \cdot \left(\max_{S \in \text{Selected}} \text{Sim}(P, S) \times 8.0\right)$$
+
+* **Format Interleaving**: Prevents consecutive runs of heavy videos by interleaving shorter items.
 
 ---
 
