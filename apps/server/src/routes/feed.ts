@@ -105,6 +105,9 @@ export function createFeedRoutes(
         interactedSkipped,
         interactedDwellMs,
         lastPositionSeconds,
+        loopCount,
+        carouselDepth,
+        audioUnmuted,
       } = body;
 
       const sessionId = crypto.randomUUID();
@@ -113,8 +116,9 @@ export function createFeedRoutes(
       db.query(`
         INSERT INTO watch_sessions (
           id, post_id, started_at, watch_duration_seconds, completion_rate,
-          interacted_skipped, interacted_dwell_ms, last_position_seconds
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          interacted_skipped, interacted_dwell_ms, last_position_seconds,
+          loop_count, carousel_depth, audio_unmuted
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         sessionId,
         postId,
@@ -123,7 +127,10 @@ export function createFeedRoutes(
         completionRate,
         interactedSkipped ? 1 : 0,
         interactedDwellMs || null,
-        lastPositionSeconds || null
+        lastPositionSeconds || null,
+        loopCount || 0,
+        carouselDepth ?? 1.0,
+        audioUnmuted ? 1 : 0
       );
 
       return { success: true, sessionId };
@@ -135,6 +142,9 @@ export function createFeedRoutes(
         interactedSkipped: t.Boolean(),
         interactedDwellMs: t.Optional(t.Number()),
         lastPositionSeconds: t.Optional(t.Number()),
+        loopCount: t.Optional(t.Number()),
+        carouselDepth: t.Optional(t.Number()),
+        audioUnmuted: t.Optional(t.Boolean()),
       })
     });
 }
