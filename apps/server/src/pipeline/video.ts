@@ -247,10 +247,14 @@ export async function processVideoToHLS(
       ? "scale='min(480,iw)':-2,format=yuv420p"
       : "scale=-2:'min(480,ih)',format=yuv420p";
 
+    // Adaptive timeout based on video duration: at least 600s (10 min), plus 2s per video second
+    const transcodeTimeoutMs = Math.max(timeoutMs, Math.max(600_000, Math.round(metadata.duration * 2000)));
+
     await runCommand(
       "ffmpeg",
       [
         "-y",
+        "-threads", "0",
         "-i", inputFilePath,
         "-vf", scaleFilter,
         "-c:v", "libx264",
@@ -270,7 +274,7 @@ export async function processVideoToHLS(
       ],
       {
         signal,
-        timeoutMs,
+        timeoutMs: transcodeTimeoutMs,
         onStderrChunk: (chunkText) => {
           const sec = parseFfmpegTimeSeconds(chunkText);
           if (sec !== null && metadata.duration > 0) {
@@ -320,13 +324,14 @@ export async function processVideoToHLS(
         "ffmpeg",
         [
           "-y",
+          "-threads", "0",
           "-i", inputFilePath,
           "-vf", tileFilter,
           "-vframes", "1",
           "-q:v", "75",
           gridImagePath,
         ],
-        { signal, timeoutMs: 60_000 }
+        { signal, timeoutMs: Math.max(120_000, Math.round(metadata.duration * 500)) }
       );
     } catch (gridErr: any) {
       if (gridErr?.name === "AbortError" || signal?.aborted) {
@@ -337,13 +342,14 @@ export async function processVideoToHLS(
         "ffmpeg",
         [
           "-y",
+          "-threads", "0",
           "-ss", "00:00:00.5",
           "-i", inputFilePath,
           "-vframes", "1",
           "-vf", "scale=360:-2",
           gridImagePath,
         ],
-        { signal, timeoutMs: 45_000 }
+        { signal, timeoutMs: 60_000 }
       );
     }
     const thumbnailGrid = await readFile(gridImagePath);
@@ -361,10 +367,13 @@ export async function processVideoToHLS(
     const thumbWidth = 100;
     const thumbHeight = Math.round(thumbWidth / metadata.aspectRatio);
 
+    const scrubTimeoutMs = Math.max(180_000, Math.round(metadata.duration * 1000));
+
     await runCommand(
       "ffmpeg",
       [
         "-y",
+        "-threads", "0",
         "-i", inputFilePath,
         "-vf", `fps=1,scale=${thumbWidth}:${thumbHeight},tile=10x10`,
         "-q:v", "70",
@@ -372,7 +381,7 @@ export async function processVideoToHLS(
       ],
       {
         signal,
-        timeoutMs: 120_000,
+        timeoutMs: scrubTimeoutMs,
         onStderrChunk: (chunkText) => {
           const sec = parseFfmpegTimeSeconds(chunkText);
           if (sec !== null && metadata.duration > 0) {

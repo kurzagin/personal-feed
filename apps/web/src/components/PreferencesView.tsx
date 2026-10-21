@@ -13,6 +13,7 @@ import {
   Flame,
   Info,
 } from "lucide-react";
+import { StorageAuditCard } from "./StorageAuditCard";
 
 interface TagAffinity {
   tagId: number;
@@ -255,6 +256,9 @@ export const PreferencesView: React.FC<PreferencesViewProps> = ({
             </div>
           )}
         </div>
+
+        {/* Storage Integrity & R2 Audit */}
+        <StorageAuditCard />
 
         {/* Danger Zone: Reset Algorithm */}
         <div className="p-5 sm:p-6 rounded-2xl bg-red-950/20 border border-red-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
