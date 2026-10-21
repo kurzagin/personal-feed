@@ -13,6 +13,44 @@ export function createFeedRoutes(db: Database, ranker: FeedRanker) {
         limit: t.Optional(t.String()),
       })
     })
+    .get("/preferences/stats", () => {
+      const sessionCountRow = db.query("SELECT COUNT(*) as count FROM watch_sessions").get() as { count: number };
+      const affinities = ranker.getUserTagAffinities();
+      
+      const tagAffinityList: Array<{ tagId: number; name: string; category: string; score: number }> = [];
+      if (affinities.size > 0) {
+        const tagIds = Array.from(affinities.keys());
+        const placeholders = tagIds.map(() => "?").join(",");
+        const tagRows = db.query(`SELECT id, name, category FROM tags WHERE id IN (${placeholders})`).all(...tagIds) as Array<{ id: number; name: string; category: string }>;
+        const tagMap = new Map(tagRows.map(t => [t.id, t]));
+
+        for (const [id, score] of affinities.entries()) {
+          const tagInfo = tagMap.get(id);
+          if (tagInfo) {
+            tagAffinityList.push({
+              tagId: id,
+              name: tagInfo.name,
+              category: tagInfo.category,
+              score: Math.round(score * 100) / 100,
+            });
+          }
+        }
+        tagAffinityList.sort((a, b) => b.score - a.score);
+      }
+
+      return {
+        sessionCount: sessionCountRow?.count || 0,
+        topAffinities: tagAffinityList.slice(0, 30),
+      };
+    })
+    .post("/preferences/reset", () => {
+      const deletedSessions = db.query("DELETE FROM watch_sessions").run();
+      return {
+        success: true,
+        message: "Algorithm and watch session history reset successfully",
+        clearedSessions: deletedSessions.changes,
+      };
+    })
     .post("/session", ({ body }) => {
       const {
         postId,

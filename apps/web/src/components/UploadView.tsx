@@ -1031,14 +1031,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
             </span>
           </button>
 
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/50 backdrop-blur-xl border border-white/15 shadow-lg">
-            <Lock className="w-3 h-3 text-cyan-400" />
-            <span className="text-[10px] font-mono tracking-wider uppercase text-zinc-200">
-              AES-256-GCM Vault
-            </span>
-          </div>
-
-          {/* Change file, folder, or clear draft actions */}
+          {/* Change file or clear draft actions */}
           <div className="flex items-center gap-1.5">
             {items.length > 0 && !isBusy && (
               <button
@@ -1051,16 +1044,6 @@ export const UploadView: React.FC<UploadViewProps> = ({
                 <Trash2 className="w-4 h-4" />
               </button>
             )}
-            <button
-              type="button"
-              disabled={isBusy}
-              title="Upload whole folder"
-              onClick={() => folderInputRef.current?.click()}
-              aria-label="Upload folder"
-              className="w-10 h-10 rounded-full bg-black/50 hover:bg-black/75 backdrop-blur-xl border border-white/15 flex items-center justify-center text-white active:scale-90 transition shadow-lg disabled:opacity-30 disabled:pointer-events-none"
-            >
-              <FolderUp className="w-4 h-4 text-zinc-200" />
-            </button>
             <button
               type="button"
               disabled={isBusy}
