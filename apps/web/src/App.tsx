@@ -3,6 +3,7 @@ import type { Post, Tag } from "@personal-feed/shared";
 import { FeedCard } from "./components/FeedCard";
 import { UploadView, type ServerProgressSnapshot } from "./components/UploadView";
 import { ExploreView } from "./components/ExploreView";
+import { EditTagsView } from "./components/EditTagsView";
 import {
   Home,
   Plus,
@@ -25,7 +26,7 @@ import {
 } from "./lib/uploadDraftStore";
 
 const ACTIVE_TAB_SESSION_KEY = "pf_active_tab";
-type AppTab = "feed" | "explore" | "upload";
+type AppTab = "feed" | "explore" | "upload" | "edit-tags";
 
 export const App: React.FC = () => {
   const [tab, setTabState] = useState<AppTab>(() => {
@@ -38,6 +39,7 @@ export const App: React.FC = () => {
     }
   });
   const [posts, setPosts] = useState<(Post & { tags: Tag[] })[]>([]);
+  const [editingPost, setEditingPost] = useState<(Post & { tags: Tag[] }) | null>(null);
   const [activeIndex, setActiveIndex] = useState<number>(0);
   const [isMuted, setIsMuted] = useState<boolean>(true);
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
@@ -49,7 +51,9 @@ export const App: React.FC = () => {
   const setTab = useCallback((nextTab: AppTab) => {
     setTabState(nextTab);
     try {
-      sessionStorage.setItem(ACTIVE_TAB_SESSION_KEY, nextTab);
+      if (nextTab !== "edit-tags") {
+        sessionStorage.setItem(ACTIVE_TAB_SESSION_KEY, nextTab);
+      }
     } catch {}
   }, []);
 
@@ -173,7 +177,7 @@ export const App: React.FC = () => {
 
   // Poll background server job when user is on Feed or Explore tabs
   useEffect(() => {
-    if (tab === "upload") return;
+    if (tab === "upload" || tab === "edit-tags") return;
 
     let active = true;
     const checkBackgroundStatus = async () => {
@@ -565,6 +569,10 @@ export const App: React.FC = () => {
                           containerRef.current.scrollTo({ top: 0 });
                         }
                       }}
+                      onOpenSettings={() => {
+                        setEditingPost(post);
+                        setTab("edit-tags");
+                      }}
                       onRecordSession={(stats) =>
                         handleRecordSession(post.id, stats)
                       }
@@ -652,13 +660,37 @@ export const App: React.FC = () => {
             />
           </div>
         )}
+
+        {/* VIEW 4: FULL-PAGE EDIT TAGS STUDIO */}
+        {tab === "edit-tags" && editingPost && (
+          <div className="w-full h-full flex-1 overflow-hidden">
+            <EditTagsView
+              post={editingPost}
+              onSave={(updatedTags) => {
+                setPosts((prevPosts) =>
+                  prevPosts.map((p) =>
+                    p.id === editingPost.id ? { ...p, tags: updatedTags } : p
+                  )
+                );
+                setToastMessage("Tags updated successfully");
+                setTimeout(() => setToastMessage(null), 3000);
+                setTab("feed");
+                setEditingPost(null);
+              }}
+              onCancel={() => {
+                setTab("feed");
+                setEditingPost(null);
+              }}
+            />
+          </div>
+        )}
       </main>
 
       {/* =====================================================================
           MOBILE FIXED BOTTOM NAVIGATION BAR (`md:hidden`)
-          (Hidden in Upload mode for full-bleed mobile preview)
+          (Hidden in Upload mode and Edit Tags mode for full-bleed mobile preview)
          ===================================================================== */}
-      {tab !== "upload" && (
+      {tab !== "upload" && tab !== "edit-tags" && (
         <nav
           aria-label="Bottom Navigation"
           className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-black/95 border-t border-zinc-900/80 flex items-center justify-around z-50 px-6 backdrop-blur-md"

@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Layers,
   Zap,
+  Settings,
 } from "lucide-react";
 import Hls from "hls.js";
 
@@ -18,6 +19,7 @@ interface FeedCardProps {
   isMuted: boolean;
   onToggleMute: () => void;
   onTagClick?: (tagName: string) => void;
+  onOpenSettings?: () => void;
   onRecordSession: (stats: {
     duration: number;
     completion: number;
@@ -39,6 +41,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({
   isMuted,
   onToggleMute,
   onTagClick,
+  onOpenSettings,
   onRecordSession,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -587,6 +590,21 @@ export const FeedCard: React.FC<FeedCardProps> = ({
             data-no-stage-click
             className="md:hidden absolute right-3.5 bottom-20 flex flex-col items-center gap-4 z-20"
           >
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenSettings();
+                }}
+                aria-label="Settings"
+                title="Settings & Tags"
+                className="p-3 rounded-full bg-black/40 backdrop-blur-xl border border-white/10 text-white/90 active:scale-90 transition shadow-lg hover:text-white hover:bg-black/60"
+              >
+                <Settings className="w-6 h-6" />
+              </button>
+            )}
+
             <button
               type="button"
               onClick={(e) => {
@@ -715,11 +733,28 @@ export const FeedCard: React.FC<FeedCardProps> = ({
           )}
         </div>
 
-        {/* DESKTOP ONLY: Side Action Dock (Like, Mute, Carousel Info outside the video frame) */}
+        {/* DESKTOP ONLY: Side Action Dock (Settings, Like, Mute, Carousel Info outside the video frame) */}
         <div
           data-no-stage-click
           className="hidden md:flex flex-col items-center justify-end gap-4 self-end pb-6 shrink-0"
         >
+          {onOpenSettings && (
+            <div className="flex flex-col items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                title="Settings & Tags"
+                aria-label="Settings"
+                className="w-12 h-12 rounded-2xl border flex items-center justify-center transition active:scale-90 shadow-lg bg-zinc-900/90 hover:bg-zinc-800 border-white/10 text-white/90 hover:text-white"
+              >
+                <Settings className="w-5 h-5" />
+              </button>
+              <span className="text-[10px] font-mono text-zinc-400">
+                Tags
+              </span>
+            </div>
+          )}
+
           <div className="flex flex-col items-center gap-1.5">
             <button
               type="button"
