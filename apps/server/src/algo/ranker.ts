@@ -1,10 +1,23 @@
 import { Database } from "bun:sqlite";
-import type { Post, Tag } from "@personal-feed/shared";
+import type { Post, Tag, TagCategory } from "@personal-feed/shared";
 
 interface ScoredPost {
   post: Post & { tags: Tag[] };
   score: number;
 }
+
+/**
+ * Category-based affinity multiplier.
+ * Higher values for artist & character tags reflect higher user intent signals compared
+ * to generic descriptors (e.g. 'solo', 'looking_at_viewer').
+ */
+const CATEGORY_WEIGHTS: Record<TagCategory, number> = {
+  artist: 3.5,
+  character: 2.5,
+  copyright: 2.0,
+  general: 1.0,
+  meta: 0.5,
+};
 
 export class FeedRanker {
   private db: Database;
@@ -145,10 +158,12 @@ export class FeedRanker {
     const scored: ScoredPost[] = candidates.map((post) => {
       let score = 0;
 
-      // A. Tag Affinity Score
+      // A. Category-Weighted Tag Affinity Score
       let tagScore = 0;
       for (const t of post.tags) {
-        tagScore += tagAffinities.get(t.id) || 0;
+        const rawAffinity = tagAffinities.get(t.id) || 0;
+        const weight = CATEGORY_WEIGHTS[t.category] ?? 1.0;
+        tagScore += rawAffinity * weight;
       }
       score += tagScore;
 

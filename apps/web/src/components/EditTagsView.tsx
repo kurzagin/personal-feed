@@ -1,6 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import type { Post, Tag, TagCategory } from "@personal-feed/shared";
-import { TagCategoryColors } from "@personal-feed/shared";
+import {
+  TagCategoryColors,
+  TAG_CATEGORY_PREFIXES,
+  parseTagInput,
+  TagCategoryPrefixDef,
+} from "@personal-feed/shared";
 import {
   ArrowLeft,
   Sparkles,
@@ -46,6 +51,8 @@ export const EditTagsView: React.FC<EditTagsViewProps> = ({
   const [suggestions, setSuggestions] = useState<TagSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
+  const [activePrefixPrompt, setActivePrefixPrompt] = useState<TagCategoryPrefixDef | null>(null);
+  const tagInputRef = useRef<HTMLInputElement>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
@@ -69,31 +76,65 @@ export const EditTagsView: React.FC<EditTagsViewProps> = ({
     ? `/api/media/item/${currentItem.id}/stream`
     : `/api/media/${post.id}/stream`;
 
-  // Autocomplete search against /api/tags?q=...
+  // Autocomplete search and prefix detection against /api/tags?q=...
   useEffect(() => {
-    const q = tagInput.trim().toLowerCase();
-    if (q.length < 1) {
+    const raw = tagInput.trim().toLowerCase();
+    if (!raw) {
       setSuggestions([]);
       setShowSuggestions(false);
+      setActivePrefixPrompt(null);
       return;
     }
 
+    const matchedPrefix = TAG_CATEGORY_PREFIXES.find((def) => {
+      if (def.aliases.includes(raw) || def.prefix.startsWith(raw)) {
+        return true;
+      }
+      return false;
+    });
+
+    if (matchedPrefix && raw !== matchedPrefix.prefix) {
+      setActivePrefixPrompt(matchedPrefix);
+    } else {
+      setActivePrefixPrompt(null);
+    }
+
+    const parsed = parseTagInput(raw);
+    const searchTarget = parsed.name;
+    const categoryFilter = parsed.explicitCategory;
+
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/tags?q=${encodeURIComponent(q)}`);
-        if (res.ok) {
-          const data = await res.json();
-          setSuggestions(data.tags || []);
-          setShowSuggestions(true);
-          setSelectedIndex(-1);
+        const queryParams = new URLSearchParams();
+        if (searchTarget) queryParams.set("q", searchTarget);
+        if (categoryFilter) queryParams.set("category", categoryFilter);
+
+        if (searchTarget || categoryFilter) {
+          const res = await fetch(`/api/tags?${queryParams.toString()}`);
+          if (res.ok) {
+            const data = await res.json();
+            setSuggestions(data.tags || []);
+            setShowSuggestions((data.tags || []).length > 0 || !!matchedPrefix);
+            setSelectedIndex(-1);
+            return;
+          }
         }
+        setShowSuggestions(!!matchedPrefix);
       } catch {
         // Ignore network errors during debounce
       }
-    }, 150);
+    }, 120);
 
     return () => clearTimeout(timer);
   }, [tagInput]);
+
+  const handleApplyPrefix = (def: TagCategoryPrefixDef) => {
+    setTagInput(def.prefix);
+    setActivePrefixPrompt(null);
+    if (tagInputRef.current) {
+      tagInputRef.current.focus();
+    }
+  };
 
   const handleSelectSuggestion = (s: TagSuggestion) => {
     if (isSaving) return;
@@ -101,6 +142,7 @@ export const EditTagsView: React.FC<EditTagsViewProps> = ({
       setTags((prev) => [...prev, { name: s.name, category: s.category }]);
     }
     setTagInput("");
+    setActivePrefixPrompt(null);
     setShowSuggestions(false);
   };
 
@@ -109,8 +151,12 @@ export const EditTagsView: React.FC<EditTagsViewProps> = ({
     const inputVal = (rawName ?? tagInput).trim();
     if (!inputVal) return;
 
+    // Check if input has single or batch
+    const { name: parsedName, explicitCategory } = parseTagInput(inputVal);
+    if (!parsedName) return;
+
     // Support comma or space separated batch entry
-    const entries = inputVal
+    const entries = parsedName
       .split(/[,\s]+/)
       .map((n) => n.trim().toLowerCase().replace(/^#+/, "").replace(/\s+/g, "_"))
       .filter(Boolean);
@@ -122,7 +168,7 @@ export const EditTagsView: React.FC<EditTagsViewProps> = ({
       for (const val of entries) {
         if (!next.some((t) => t.name === val)) {
           const matched = suggestions.find((s) => s.name.toLowerCase() === val);
-          const category: TagCategory = matched?.category || "general";
+          const category: TagCategory = explicitCategory || matched?.category || "general";
           next.push({ name: val, category });
         }
       }
@@ -131,6 +177,7 @@ export const EditTagsView: React.FC<EditTagsViewProps> = ({
 
     setTagInput("");
     setSuggestions([]);
+    setActivePrefixPrompt(null);
     setShowSuggestions(false);
   };
 
@@ -182,12 +229,35 @@ export const EditTagsView: React.FC<EditTagsViewProps> = ({
   const renderInspectorControls = () => {
     return (
       <>
-        {/* Danbooru Dropdown Suggestions */}
-        {!isSaving && showSuggestions && suggestions.length > 0 && (
+        {/* Danbooru Dropdown Suggestions & Category Prefix Quick Fill */}
+        {!isSaving && showSuggestions && (activePrefixPrompt || suggestions.length > 0) && (
           <div
             ref={dropdownRef}
-            className="max-h-48 overflow-y-auto custom-scrollbar bg-zinc-950/95 backdrop-blur-2xl border border-white/15 rounded-2xl shadow-2xl divide-y divide-white/5"
+            className="max-h-56 overflow-y-auto custom-scrollbar bg-zinc-950/95 backdrop-blur-2xl border border-white/15 rounded-2xl shadow-2xl divide-y divide-white/5"
           >
+            {/* Quick prefix filler item if typing e.g. @ch, ch:, @art */}
+            {activePrefixPrompt && (
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  handleApplyPrefix(activePrefixPrompt);
+                }}
+                className="w-full px-3.5 py-2.5 text-left flex items-center justify-between transition text-xs bg-cyan-950/40 hover:bg-cyan-900/50 border-b border-cyan-500/20 text-cyan-200"
+              >
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span className="font-semibold text-white">
+                    Set {activePrefixPrompt.label}:
+                  </span>
+                  <code className="text-[11px] font-mono bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded">
+                    {activePrefixPrompt.prefix}
+                  </code>
+                </div>
+                <span className="text-[10px] text-cyan-400 font-medium">Tap to fill</span>
+              </button>
+            )}
+
             {suggestions.map((s, index) => {
               const colors = TagCategoryColors[s.category] || TagCategoryColors.general;
               const isSelected = index === selectedIndex;
@@ -272,11 +342,12 @@ export const EditTagsView: React.FC<EditTagsViewProps> = ({
           })}
 
           <input
+            ref={tagInputRef}
             type="text"
             disabled={isSaving}
             placeholder={
               tags.length === 0
-                ? "Add tags (e.g. uniform, frieren)... press Enter"
+                ? "Add tags (e.g. @ch or frieren)... press Enter"
                 : "Add tag..."
             }
             value={tagInput}
