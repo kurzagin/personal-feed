@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import type { Post, Tag } from "@personal-feed/shared";
 import {
-  Heart,
   Volume2,
   VolumeX,
   Play,
@@ -25,16 +24,9 @@ interface FeedCardProps {
   onRecordSession: (stats: {
     duration: number;
     completion: number;
-    favorite: boolean;
     skipped: boolean;
     dwellMs?: number;
   }) => void;
-}
-
-interface HeartBurst {
-  id: number;
-  x: number;
-  y: number;
 }
 
 export const FeedCard: React.FC<FeedCardProps> = ({
@@ -52,11 +44,9 @@ export const FeedCard: React.FC<FeedCardProps> = ({
 
   const [activeItemIndex, setActiveItemIndex] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
-  const [isFavorited, setIsFavorited] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(post.duration_seconds || 0);
   const [isFastForwarding, setIsFastForwarding] = useState<boolean>(false);
-  const [heartBursts, setHeartBursts] = useState<HeartBurst[]>([]);
   const [naturalAspectRatio, setNaturalAspectRatio] = useState<number | null>(null);
   const [fitMode, setFitMode] = useState<"contain" | "cover">("contain");
 
@@ -69,9 +59,7 @@ export const FeedCard: React.FC<FeedCardProps> = ({
   const startTimeRef = useRef<number>(Date.now());
   const loopCountRef = useRef<number>(0);
 
-  // Touch & double-tap gesture refs
-  const lastTapTimeRef = useRef<number>(0);
-  const singleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Touch & gesture refs
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const didSwipeOrLongPressRef = useRef<boolean>(false);
@@ -185,7 +173,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
         onRecordSession({
           duration: elapsedSec,
           completion,
-          favorite: isFavorited,
           skipped,
           dwellMs: !isVideo ? Date.now() - startTimeRef.current : undefined,
         });
@@ -204,15 +191,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
         setIsPlaying(false);
       }
     }
-  }, []);
-
-  const triggerHeartBurst = useCallback((clientX: number, clientY: number) => {
-    const id = Date.now() + Math.random();
-    setHeartBursts((prev) => [...prev, { id, x: clientX, y: clientY }]);
-    setIsFavorited(true);
-    setTimeout(() => {
-      setHeartBursts((prev) => prev.filter((b) => b.id !== id));
-    }, 800);
   }, []);
 
   // Desktop keyboard shortcuts when this card is active
@@ -238,9 +216,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
       } else if (e.key === "m" || e.key === "M") {
         e.preventDefault();
         onToggleMute();
-      } else if (e.key === "l" || e.key === "L" || e.key === "f" || e.key === "F") {
-        e.preventDefault();
-        setIsFavorited((prev) => !prev);
       } else if (e.key === "ArrowLeft") {
         if (e.shiftKey && isVideo && videoRef.current) {
           e.preventDefault();
@@ -383,27 +358,9 @@ export const FeedCard: React.FC<FeedCardProps> = ({
     touchStartPosRef.current = null;
     if (didSwipeOrLongPressRef.current) return;
 
-    // Distinguish Single Tap (Play/Pause) vs Double Tap (Heart Burst Like)
-    const now = Date.now();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const relX = e.clientX - rect.left;
-    const relY = e.clientY - rect.top;
-
-    if (now - lastTapTimeRef.current < 260) {
-      if (singleTapTimerRef.current) {
-        clearTimeout(singleTapTimerRef.current);
-        singleTapTimerRef.current = null;
-      }
-      triggerHeartBurst(relX, relY);
-      lastTapTimeRef.current = 0;
-    } else {
-      lastTapTimeRef.current = now;
-      if (isVideo) {
-        singleTapTimerRef.current = setTimeout(() => {
-          togglePlay();
-          singleTapTimerRef.current = null;
-        }, 230);
-      }
+    // Single Tap to Play/Pause video immediately without double-tap delay
+    if (isVideo) {
+      togglePlay();
     }
   };
 
@@ -519,17 +476,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
               />
             </div>
           )}
-
-          {/* Double-Tap Floating Heart Bursts */}
-          {heartBursts.map((burst) => (
-            <div
-              key={burst.id}
-              style={{ left: burst.x, top: burst.y }}
-              className="absolute pointer-events-none z-40 animate-heart-pop"
-            >
-              <Heart className="w-20 h-20 fill-rose-500 text-rose-500 drop-shadow-[0_8px_24px_rgba(244,63,94,0.65)]" />
-            </div>
-          ))}
 
           {/* 2x Speed Pill Indicator (when holding screen) */}
           {isFastForwarding && (
@@ -648,22 +594,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
               ) : (
                 <Minimize2 className="w-6 h-6 text-cyan-300" />
               )}
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsFavorited(!isFavorited);
-              }}
-              aria-label="Like"
-              className="p-3 rounded-full bg-black/40 backdrop-blur-xl border border-white/10 text-white active:scale-90 transition shadow-lg"
-            >
-              <Heart
-                className={`w-6 h-6 transition-colors duration-200 ${
-                  isFavorited ? "fill-rose-500 text-rose-500" : "text-white/90"
-                }`}
-              />
             </button>
 
             {isVideo && (
@@ -820,29 +750,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
             </button>
             <span className="text-[10px] font-mono text-zinc-400">
               {fitMode === "contain" ? "Fit" : "Fill"}
-            </span>
-          </div>
-
-          <div className="flex flex-col items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setIsFavorited(!isFavorited)}
-              title="Favorite (L)"
-              aria-label="Favorite"
-              className={`w-12 h-12 rounded-2xl border flex items-center justify-center transition active:scale-90 shadow-lg ${
-                isFavorited
-                  ? "bg-rose-500/20 border-rose-500/40 text-rose-400"
-                  : "bg-zinc-900/90 hover:bg-zinc-800 border-white/10 text-white"
-              }`}
-            >
-              <Heart
-                className={`w-6 h-6 transition-transform duration-200 ${
-                  isFavorited ? "fill-rose-500 text-rose-500 scale-110" : ""
-                }`}
-              />
-            </button>
-            <span className="text-[10px] font-mono text-zinc-400">
-              {isFavorited ? "Liked" : "Like"}
             </span>
           </div>
 

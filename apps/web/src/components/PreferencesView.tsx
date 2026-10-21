@@ -168,7 +168,7 @@ export const PreferencesView: React.FC<PreferencesViewProps> = ({
           </div>
           <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
             The ranking system balances your personal tag affinities with time-decay and fatigue protection.
-            When you favorite or loop content, its tags gain positive affinity. Skipped videos receive negative weights.
+            When you watch or loop content, its tags gain positive affinity. Skipped videos receive negative weights.
             Affinity naturally decays with a 7-day half-life to keep your feed discovering new media.
           </p>
 
@@ -251,7 +251,7 @@ export const PreferencesView: React.FC<PreferencesViewProps> = ({
             <div className="p-6 rounded-xl bg-zinc-950/40 border border-dashed border-white/10 text-center flex flex-col items-center gap-2">
               <Info className="w-5 h-5 text-zinc-500" />
               <p className="text-xs text-zinc-400">
-                No affinity data collected yet. Browse, favorite, or watch posts to tune your algorithm.
+                No affinity data collected yet. Browse or watch posts to tune your algorithm.
               </p>
             </div>
           )}
@@ -268,7 +268,7 @@ export const PreferencesView: React.FC<PreferencesViewProps> = ({
               Reset Algorithm History
             </h2>
             <p className="text-xs text-zinc-400">
-              Clears all watch sessions, likes affinity decay, and view fatigue. Your uploaded posts and tags remain untouched.
+              Clears all watch sessions, affinity decay, and view fatigue. Your uploaded posts and tags remain untouched.
             </p>
           </div>
           <button

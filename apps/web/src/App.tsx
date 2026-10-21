@@ -257,7 +257,6 @@ export const App: React.FC = () => {
     stats: {
       duration: number;
       completion: number;
-      favorite: boolean;
       skipped: boolean;
       dwellMs?: number;
     }
@@ -270,7 +269,6 @@ export const App: React.FC = () => {
           postId,
           watchDurationSeconds: stats.duration,
           completionRate: stats.completion,
-          interactedFavorite: stats.favorite,
           interactedSkipped: stats.skipped,
           interactedDwellMs: stats.dwellMs,
         }),
@@ -458,9 +456,9 @@ export const App: React.FC = () => {
               </kbd>
             </div>
             <div className="flex items-center justify-between">
-              <span>Mute / Like</span>
+              <span>Mute</span>
               <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-zinc-200 font-mono text-[10px]">
-                M / L
+                M
               </kbd>
             </div>
           </div>
