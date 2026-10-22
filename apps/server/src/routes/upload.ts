@@ -13,9 +13,12 @@ import {
 import type { TagCategory } from "@personal-feed/shared";
 import { processImageToAvif } from "../pipeline/image";
 import { processVideoToHLS } from "../pipeline/video";
+import { downloadMediaFromUrl } from "../pipeline/urlDownloader";
+import { promises as fs } from "node:fs";
 
 export type UploadStage =
   | "receiving"
+  | "downloading_url"
   | "deduplicating"
   | "transcoding"
   | "thumbnails"
@@ -857,6 +860,338 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
         mediaType: t.Optional(t.String()),
         aspectRatio: t.Optional(t.String()),
         durationSeconds: t.Optional(t.String()),
+        rating: t.Optional(t.String()),
+        tags: t.Optional(t.Any()),
+      })
+    })
+    .post("/ingest/probe-url", async ({ body, request, set }) => {
+      const targetUrl = (body.url || "").trim();
+      if (!targetUrl) {
+        set.status = 400;
+        return { error: "No URL provided" };
+      }
+
+      const accept = request.headers.get("accept") || "";
+      const isSSE = accept.includes("text/event-stream") || body.stream === true;
+
+      if (!isSSE) {
+        try {
+          const downloadResult = await downloadMediaFromUrl(targetUrl);
+          const autoTags: Array<{ name: string; category: TagCategory }> = [];
+
+          if (downloadResult.tags && downloadResult.tags.length > 0) {
+            const seen = new Set<string>();
+            for (const rawTag of downloadResult.tags) {
+              const clean = rawTag.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+              if (clean && !seen.has(clean)) {
+                autoTags.push({ name: clean, category: "general" });
+                seen.add(clean);
+              }
+            }
+          }
+
+          if (downloadResult.author) {
+            const cleanAuthor = downloadResult.author.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+            if (cleanAuthor && !autoTags.some((t) => t.name.toLowerCase() === cleanAuthor)) {
+              autoTags.push({ name: cleanAuthor, category: "creator" });
+            }
+          }
+
+          const mediaList: Array<{
+            filename: string;
+            mimeType: string;
+            base64: string;
+            size: number;
+          }> = [];
+
+          for (const item of downloadResult.items) {
+            const buf = await fs.readFile(item.filePath);
+            mediaList.push({
+              filename: item.filename,
+              mimeType: item.mimeType,
+              base64: buf.toString("base64"),
+              size: buf.length,
+            });
+          }
+
+          await downloadResult.cleanup();
+
+          return {
+            success: true,
+            title: downloadResult.title,
+            description: downloadResult.description,
+            author: downloadResult.author,
+            suggestedTags: autoTags,
+            items: mediaList,
+          };
+        } catch (err: any) {
+          set.status = 500;
+          return {
+            error: err?.message || "Failed to fetch media from URL",
+          };
+        }
+      }
+
+      // Streamed SSE response for real-time live progress updates in the UI
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const send = (event: string, payload: any) => {
+            try {
+              controller.enqueue(
+                encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`)
+              );
+            } catch {}
+          };
+
+          try {
+            send("progress", { message: "Starting probe...", detail: targetUrl });
+
+            const downloadResult = await downloadMediaFromUrl(targetUrl, {
+              onProgress: (msg) => {
+                send("progress", { message: msg });
+              },
+            });
+
+            send("progress", { message: "Reading extracted media files into preview..." });
+
+            const autoTags: Array<{ name: string; category: TagCategory }> = [];
+            if (downloadResult.tags && downloadResult.tags.length > 0) {
+              const seen = new Set<string>();
+              for (const rawTag of downloadResult.tags) {
+                const clean = rawTag.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+                if (clean && !seen.has(clean)) {
+                  autoTags.push({ name: clean, category: "general" });
+                  seen.add(clean);
+                }
+              }
+            }
+
+            if (downloadResult.author) {
+              const cleanAuthor = downloadResult.author.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+              if (cleanAuthor && !autoTags.some((t) => t.name.toLowerCase() === cleanAuthor)) {
+                autoTags.push({ name: cleanAuthor, category: "creator" });
+              }
+            }
+
+            const mediaList: Array<{
+              filename: string;
+              mimeType: string;
+              base64: string;
+              size: number;
+            }> = [];
+
+            for (const item of downloadResult.items) {
+              const buf = await fs.readFile(item.filePath);
+              mediaList.push({
+                filename: item.filename,
+                mimeType: item.mimeType,
+                base64: buf.toString("base64"),
+                size: buf.length,
+              });
+            }
+
+            await downloadResult.cleanup();
+
+            send("complete", {
+              success: true,
+              title: downloadResult.title,
+              description: downloadResult.description,
+              author: downloadResult.author,
+              suggestedTags: autoTags,
+              items: mediaList,
+            });
+            controller.close();
+          } catch (err: any) {
+            send("error", {
+              error: err?.message || "Failed to extract media from URL",
+            });
+            controller.close();
+          }
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+        },
+      });
+    }, {
+      body: t.Object({
+        url: t.String(),
+        stream: t.Optional(t.Boolean()),
+      })
+    })
+    .post("/ingest/url", async ({ body, request, set }) => {
+      const headerUploadId = request.headers.get("x-upload-id");
+      const isAsyncMode = request.headers.get("x-upload-async") === "1";
+      const uploadId = (body.uploadId || headerUploadId || ulid()).trim();
+      const targetUrl = (body.url || "").trim();
+
+      if (!targetUrl) {
+        set.status = 400;
+        return { error: "No URL provided" };
+      }
+
+      const rating = body.rating || "general";
+      let rawTags: Array<{ name: string; category: TagCategory }> = [];
+      if (Array.isArray(body.tags)) {
+        rawTags = body.tags;
+      } else if (typeof body.tags === "string") {
+        try {
+          rawTags = JSON.parse(body.tags);
+        } catch {
+          rawTags = [];
+        }
+      }
+
+      const job = getOrCreateJob(uploadId, 1);
+      const signal = job.abortController.signal;
+
+      try {
+        throwIfAborted(signal);
+
+        updateJobProgress(job, {
+          stage: "downloading_url",
+          overallPercent: 2,
+          currentItem: 1,
+          totalItems: 1,
+          message: "Fetching and extracting media from URL...",
+          detail: targetUrl,
+        });
+
+        const downloadResult = await downloadMediaFromUrl(targetUrl, {
+          signal,
+          onProgress: (msg) => {
+            updateJobProgress(job, {
+              message: msg,
+            });
+          },
+        });
+
+        throwIfAborted(signal);
+
+        // Auto-merge tags from extractor if user didn't specify custom tags
+        if (downloadResult.tags && downloadResult.tags.length > 0) {
+          const existingNames = new Set(rawTags.map((t) => t.name.toLowerCase()));
+          for (const extTag of downloadResult.tags) {
+            const clean = extTag.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+            if (clean && !existingNames.has(clean)) {
+              rawTags.push({ name: clean, category: "general" });
+              existingNames.add(clean);
+            }
+          }
+        }
+
+        if (downloadResult.author) {
+          const cleanAuthor = downloadResult.author.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+          if (cleanAuthor && !rawTags.some((t) => t.name.toLowerCase() === cleanAuthor)) {
+            rawTags.push({ name: cleanAuthor, category: "creator" });
+          }
+        }
+
+        updateJobProgress(job, {
+          stage: "deduplicating",
+          overallPercent: 5,
+          currentItem: 1,
+          totalItems: downloadResult.items.length,
+          message: `Verifying ${downloadResult.items.length} downloaded media items...`,
+        });
+
+        const preparedFiles: PreparedFile[] = [];
+        for (const item of downloadResult.items) {
+          throwIfAborted(signal);
+          const buf = await fs.readFile(item.filePath);
+          const hash = createHash("sha256").update(buf).digest("hex");
+          const isVideo = item.mimeType.startsWith("video/");
+          preparedFiles.push({
+            name: item.filename,
+            type: item.mimeType,
+            buffer: buf,
+            hash,
+            isVideo,
+          });
+        }
+
+        // Clean up temporary extracted files after reading buffers
+        await downloadResult.cleanup();
+
+        if (preparedFiles.length === 1) {
+          const existing = db
+            .query("SELECT id FROM posts WHERE content_hash = ?")
+            .get(preparedFiles[0].hash) as { id: string } | null;
+          if (existing) {
+            updateJobProgress(job, {
+              stage: "error",
+              error: "Duplicate post: this media already exists in your feed.",
+              message: "Duplicate post detected",
+            });
+            scheduleJobCleanup(uploadId, 30_000);
+            set.status = 409;
+            return {
+              error: "Duplicate post: this media already exists in your feed.",
+              existingId: existing.id,
+              uploadId,
+            };
+          }
+        }
+
+        // Run the exact same processing pipeline
+        const pipelinePromise = runDetachedPipeline(job, preparedFiles, rating, rawTags);
+        job.promise = pipelinePromise;
+
+        if (isAsyncMode) {
+          set.status = 202;
+          return {
+            accepted: true,
+            status: "processing",
+            uploadId,
+            totalItems: preparedFiles.length,
+          };
+        }
+
+        const result = await pipelinePromise;
+        if (result.ok) {
+          return {
+            success: true,
+            postId: result.postId,
+            pageCount: result.pageCount,
+            uploadId: result.uploadId,
+          };
+        } else {
+          set.status = result.status;
+          return {
+            error: result.error,
+            cancelled: result.cancelled,
+            uploadId: result.uploadId,
+          };
+        }
+      } catch (err: any) {
+        if (err?.name === "AbortError" || signal.aborted) {
+          updateJobProgress(job, {
+            stage: "cancelled",
+            message: "Import cancelled and temporary files cleaned up.",
+          });
+          scheduleJobCleanup(uploadId, 20_000);
+          set.status = 499;
+          return { error: "Import cancelled", cancelled: true, uploadId };
+        }
+        const errorMsg = err?.message || "Failed to download media from URL";
+        updateJobProgress(job, {
+          stage: "error",
+          error: errorMsg,
+          message: "URL import failed",
+        });
+        scheduleJobCleanup(uploadId, 30_000);
+        set.status = 500;
+        return { error: errorMsg, uploadId };
+      }
+    }, {
+      body: t.Object({
+        uploadId: t.Optional(t.String()),
+        url: t.String(),
         rating: t.Optional(t.String()),
         tags: t.Optional(t.Any()),
       })
