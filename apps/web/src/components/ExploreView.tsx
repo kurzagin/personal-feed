@@ -15,7 +15,7 @@ import {
 
 interface ExploreViewProps {
   posts: (Post & { tags: Tag[] })[];
-  onSelectPost: (index: number) => void;
+  onSelectPost: (post: Post & { tags: Tag[] }, index: number) => void;
   onRefresh: () => void;
   activeTagFilter: string | null;
   onChangeTagFilter: (tag: string | null) => void;
@@ -293,7 +293,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                 return (
                   <div
                     key={post.id}
-                    onClick={() => onSelectPost(originalIndex)}
+                    onClick={() => onSelectPost(post, originalIndex)}
                     style={{ aspectRatio: `${aspectRatio}` }}
                     className="break-inside-avoid relative w-full rounded-2xl overflow-hidden bg-zinc-900 border border-white/10 hover:border-cyan-400/50 cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-cyan-500/10 group"
                   >

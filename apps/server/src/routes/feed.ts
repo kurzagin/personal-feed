@@ -59,6 +59,15 @@ export function createFeedRoutes(
         limit: t.Optional(t.String()),
       })
     })
+    .get("/explore", ({ query }) => {
+      const limit = query.limit ? parseInt(query.limit, 10) : undefined;
+      const items = ranker.getChronologicalPosts(limit);
+      return { items };
+    }, {
+      query: t.Object({
+        limit: t.Optional(t.String()),
+      })
+    })
     .get("/preferences/stats", () => {
       const sessionCountRow = db.query("SELECT COUNT(*) as count FROM watch_sessions").get() as { count: number };
       const affinities = ranker.getUserTagAffinities();
