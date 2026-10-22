@@ -28,6 +28,8 @@ import {
   Film,
   Image as ImageIcon,
   Layers,
+  Link as LinkIcon,
+  Download,
 } from "lucide-react";
 import {
   saveUploadDraft,
@@ -61,6 +63,7 @@ interface SelectedMedia {
 
 export type ServerUploadStage =
   | "receiving"
+  | "downloading_url"
   | "deduplicating"
   | "transcoding"
   | "thumbnails"
@@ -103,6 +106,8 @@ function getStageBadgeText(stage: ServerUploadStage): string {
   switch (stage) {
     case "receiving":
       return "PHASE 1/2 • RECEIVING PAYLOAD";
+    case "downloading_url":
+      return "RESOLVING • DOWNLOADING MEDIA FROM URL";
     case "deduplicating":
       return "PHASE 2/2 • INTEGRITY & DEDUP CHECK";
     case "transcoding":
@@ -135,6 +140,25 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [tags, setTags] = useState<Array<{ name: string; category: TagCategory }>>([]);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
+
+  // Mode: "files" vs "url"
+  const [importMode, setImportMode] = useState<"files" | "url">("files");
+  const [inputUrl, setInputUrl] = useState<string>("");
+  const [isFetchingUrl, setIsFetchingUrl] = useState<boolean>(false);
+  const [fetchProgressMessage, setFetchProgressMessage] = useState<string>("");
+  const [fetchSteps, setFetchSteps] = useState<string[]>([]);
+  const [fetchElapsed, setFetchElapsed] = useState<number>(0);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const fetchAbortRef = useRef<AbortController | null>(null);
+
+  // Tick elapsed seconds while fetching so the user can see it's alive
+  useEffect(() => {
+    if (!isFetchingUrl) return;
+    const startedAt = Date.now();
+    setFetchElapsed(0);
+    const t = setInterval(() => setFetchElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [isFetchingUrl]);
 
   // Rich upload & pipeline progress state
   const [phase, setPhase] = useState<UploadPhase>("idle");
@@ -574,6 +598,146 @@ export const UploadView: React.FC<UploadViewProps> = ({
     [onSuccess, resetStallTimer, startServerProgressTracking, stopTrackingStreams]
   );
 
+  const fetchAndPreviewFromUrl = useCallback(
+    async (urlToFetch: string) => {
+      const cleanUrl = urlToFetch.trim();
+      if (!cleanUrl) return;
+
+      setIsFetchingUrl(true);
+      setFetchProgressMessage("Connecting to extractor...");
+      setFetchSteps(["Connecting to extractor..."]);
+      setFetchError(null);
+      setErrorMessage(null);
+      setStatusBanner(null);
+
+      fetchAbortRef.current?.abort();
+      const abortController = new AbortController();
+      fetchAbortRef.current = abortController;
+
+      try {
+        const resp = await fetch("/api/ingest/probe-url", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify({ url: cleanUrl, stream: true }),
+          signal: abortController.signal,
+        });
+
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => null);
+          throw new Error(errData?.error || `Failed to fetch URL (HTTP ${resp.status})`);
+        }
+
+        const reader = resp.body?.getReader();
+        if (!reader) {
+          throw new Error("Unable to read streaming response from server");
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalData: any = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const block of lines) {
+            if (!block.trim()) continue;
+            let event = "message";
+            let dataStr = "";
+
+            for (const line of block.split("\n")) {
+              if (line.startsWith("event:")) {
+                event = line.replace(/^event:\s*/, "").trim();
+              } else if (line.startsWith("data:")) {
+                dataStr = line.replace(/^data:\s*/, "").trim();
+              }
+            }
+
+            if (!dataStr) continue;
+            try {
+              const payload = JSON.parse(dataStr);
+              if (event === "progress") {
+                const msg = payload.message || "Extracting media...";
+                setFetchProgressMessage(msg);
+                setFetchSteps((prev) =>
+                  prev[prev.length - 1] === msg ? prev : [...prev, msg].slice(-6)
+                );
+              } else if (event === "complete") {
+                finalData = payload;
+              } else if (event === "error") {
+                throw new Error(payload.error || "Failed to extract media from URL");
+              }
+            } catch (parseErr: any) {
+              if (event === "error") throw parseErr;
+            }
+          }
+        }
+
+        if (!finalData || !finalData.success) {
+          throw new Error("Did not receive complete media payload from server");
+        }
+
+        // Convert base64 items back to standard File objects
+        const files: File[] = [];
+        for (const item of finalData.items || []) {
+          const byteCharacters = atob(item.base64);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: item.mimeType });
+          const file = new File([blob], item.filename, { type: item.mimeType });
+          files.push(file);
+        }
+
+        if (files.length === 0) {
+          throw new Error("No media items found at the provided URL.");
+        }
+
+        // Populate suggested tags and author into tag list
+        if (Array.isArray(finalData.suggestedTags) && finalData.suggestedTags.length > 0) {
+          setTags((prev) => {
+            const existing = new Set(prev.map((t) => t.name.toLowerCase()));
+            const toAdd = finalData.suggestedTags.filter(
+              (t: any) => t.name && !existing.has(t.name.toLowerCase())
+            );
+            return [...prev, ...toAdd];
+          });
+        }
+
+        // Hydrate files directly into UI state for previewing, carousel flipping, and manual tagging!
+        hydrateFilesIntoState(files, true);
+        setStatusBanner(
+          `Extracted ${files.length} ${files.length === 1 ? "item" : "items"}. Preview and adjust tags before posting!`
+        );
+      } catch (err: any) {
+        if (err?.name === "AbortError") {
+          setStatusBanner("URL fetch cancelled.");
+        } else {
+          setFetchError(err?.message || "Failed to extract media from URL");
+        }
+      } finally {
+        if (fetchAbortRef.current === abortController) fetchAbortRef.current = null;
+        setIsFetchingUrl(false);
+        setFetchProgressMessage("");
+        setFetchSteps([]);
+      }
+    },
+    [hydrateFilesIntoState]
+  );
+
+  const cancelUrlFetch = useCallback(() => {
+    fetchAbortRef.current?.abort();
+  }, []);
+
   // Restore draft or active upload on mount (handles F5 page refresh!)
   useEffect(() => {
     if (initialFile) {
@@ -981,50 +1145,138 @@ export const UploadView: React.FC<UploadViewProps> = ({
               </div>
             )
           ) : (
-            /* Empty placeholder state (Drag & Drop on Desktop, Tap on Mobile) */
+            /* Empty placeholder state (Drag & Drop on Desktop, Tap on Mobile, or URL Tab) */
             <div className="w-full h-full flex flex-col items-center justify-center bg-zinc-950 p-6 text-center gap-4">
-              <div className="hidden md:flex flex-col items-center gap-2 mb-2">
-                <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-cyan-500/20 via-pink-500/20 to-purple-500/20 border border-white/10 flex items-center justify-center shadow-2xl">
-                  <UploadCloud className="w-8 h-8 text-cyan-400" />
+              {/* Import Mode Switcher */}
+              <div className="flex items-center gap-1 p-1 rounded-2xl bg-zinc-900 border border-white/10 shadow-lg mb-2">
+                <button
+                  type="button"
+                  onClick={() => setImportMode("files")}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition ${
+                    importMode === "files"
+                      ? "bg-white/15 text-white shadow"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  <FilePlus className="w-4 h-4 text-cyan-400" />
+                  <span>Files & Folders</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImportMode("url")}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition ${
+                    importMode === "url"
+                      ? "bg-white/15 text-white shadow"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  <LinkIcon className="w-4 h-4 text-pink-400" />
+                  <span>Import via URL / X</span>
+                </button>
+              </div>
+
+              {importMode === "files" ? (
+                <>
+                  <div className="hidden md:flex flex-col items-center gap-2 mb-2">
+                    <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-cyan-500/20 via-pink-500/20 to-purple-500/20 border border-white/10 flex items-center justify-center shadow-2xl">
+                      <UploadCloud className="w-8 h-8 text-cyan-400" />
+                    </div>
+                    <h2 className="text-lg font-bold text-white mt-2">
+                      Drag & drop media here
+                    </h2>
+                    <p className="text-xs text-zinc-400 max-w-sm">
+                      Supports high-res images (AVIF/WebP/PNG/JPG) and videos (MP4/WebM/MOV). Everything is automatically transcoded and encrypted with AES-256-GCM.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-4">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex flex-col items-center gap-2.5 p-5 rounded-2xl bg-zinc-900/90 hover:bg-zinc-900 border border-white/10 hover:border-cyan-400/40 active:scale-95 transition shadow-xl"
+                    >
+                      <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
+                        <FilePlus className="w-6 h-6 text-cyan-400" />
+                      </div>
+                      <span className="text-xs font-semibold text-white">
+                        Select Files / Videos
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => folderInputRef.current?.click()}
+                      className="flex flex-col items-center gap-2.5 p-5 rounded-2xl bg-zinc-900/90 hover:bg-zinc-900 border border-white/10 hover:border-pink-400/40 active:scale-95 transition shadow-xl"
+                    >
+                      <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
+                        <FolderUp className="w-6 h-6 text-pink-400" />
+                      </div>
+                      <span className="text-xs font-semibold text-white">
+                        Select Whole Folder
+                      </span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-zinc-500 md:hidden mt-1">
+                    Select files or a folder to merge into one post
+                  </p>
+                </>
+              ) : (
+                <div className="w-full max-w-md flex flex-col items-center gap-3">
+                  <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-pink-500/20 via-purple-500/20 to-cyan-500/20 border border-white/10 flex items-center justify-center shadow-2xl mb-1">
+                    <Download className="w-8 h-8 text-pink-400" />
+                  </div>
+                  <h2 className="text-lg font-bold text-white">
+                    Import Media from URL
+                  </h2>
+                  <p className="text-xs text-zinc-400 text-center mb-2">
+                    Paste a link from <strong>X (Twitter)</strong>, <strong>YouTube</strong>, or direct media URLs. Images & videos will be extracted, transcoded, and encrypted.
+                  </p>
+                  <div className="w-full flex flex-col gap-2">
+                    <div className="relative w-full">
+                      <input
+                        type="url"
+                        value={inputUrl}
+                        onChange={(e) => setInputUrl(e.target.value)}
+                        placeholder="https://x.com/username/status/..."
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && inputUrl.trim() && !isBusy && !isFetchingUrl) {
+                            e.preventDefault();
+                            fetchAndPreviewFromUrl(inputUrl);
+                          }
+                        }}
+                        className="w-full px-4 py-3 rounded-2xl bg-zinc-900/90 border border-white/15 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-pink-500/50 shadow-inner"
+                      />
+                      {inputUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setInputUrl("")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => fetchAndPreviewFromUrl(inputUrl)}
+                      disabled={!inputUrl.trim() || isBusy || isFetchingUrl}
+                      className="w-full py-3 rounded-2xl bg-gradient-to-r from-pink-500 to-cyan-500 text-white font-semibold text-xs tracking-wider shadow-lg shadow-pink-500/20 hover:brightness-110 active:scale-[0.98] transition flex items-center justify-center gap-2 disabled:opacity-40 cursor-pointer"
+                    >
+                      {isFetchingUrl ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                          <span>Fetching… {fetchElapsed}s</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-4 h-4" />
+                          <span>Fetch & Preview Media</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
-                <h2 className="text-lg font-bold text-white mt-2">
-                  Drag & drop media here
-                </h2>
-                <p className="text-xs text-zinc-400 max-w-sm">
-                  Supports high-res images (AVIF/WebP/PNG/JPG) and videos (MP4/WebM/MOV). Everything is automatically transcoded and encrypted with AES-256-GCM.
-                </p>
-              </div>
-
-              <div className="flex gap-4">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex flex-col items-center gap-2.5 p-5 rounded-2xl bg-zinc-900/90 hover:bg-zinc-900 border border-white/10 hover:border-cyan-400/40 active:scale-95 transition shadow-xl"
-                >
-                  <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
-                    <FilePlus className="w-6 h-6 text-cyan-400" />
-                  </div>
-                  <span className="text-xs font-semibold text-white">
-                    Select Files / Videos
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => folderInputRef.current?.click()}
-                  className="flex flex-col items-center gap-2.5 p-5 rounded-2xl bg-zinc-900/90 hover:bg-zinc-900 border border-white/10 hover:border-pink-400/40 active:scale-95 transition shadow-xl"
-                >
-                  <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
-                    <FolderUp className="w-6 h-6 text-pink-400" />
-                  </div>
-                  <span className="text-xs font-semibold text-white">
-                    Select Whole Folder
-                  </span>
-                </button>
-              </div>
-              <p className="text-xs text-zinc-500 md:hidden mt-1">
-                Select files or a folder to merge into one post
-              </p>
+              )}
             </div>
           )}
 
@@ -1344,6 +1596,87 @@ export const UploadView: React.FC<UploadViewProps> = ({
               aria-label="Dismiss notice"
             >
               <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* URL Fetch Progress Card (visible in mobile bottom sheet & desktop sidebar) */}
+        {isFetchingUrl && (
+          <div className="w-full p-3.5 rounded-2xl bg-zinc-950/90 backdrop-blur-2xl border border-pink-400/30 shadow-2xl flex flex-col gap-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[10px] font-mono tracking-wider uppercase text-pink-300">
+                <Download className="w-3.5 h-3.5 text-pink-400 animate-bounce" />
+                <span>Fetching from URL</span>
+              </div>
+              <span className="text-[11px] font-mono text-zinc-400">{fetchElapsed}s</span>
+            </div>
+
+            {/* Indeterminate activity bar */}
+            <div className="relative h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+              <div className="absolute inset-y-0 w-1/3 rounded-full bg-gradient-to-r from-pink-500 to-cyan-400 animate-[pf-indeterminate_1.2s_ease-in-out_infinite]" />
+            </div>
+            <style>{`@keyframes pf-indeterminate{0%{left:-35%}100%{left:100%}}`}</style>
+
+            <div className="flex items-start gap-2 text-xs text-white">
+              <RefreshCw className="w-3.5 h-3.5 mt-0.5 text-cyan-400 animate-spin shrink-0" />
+              <span className="leading-snug break-words">{fetchProgressMessage}</span>
+            </div>
+
+            {fetchSteps.length > 1 && (
+              <ul className="flex flex-col gap-1 pl-5 text-[11px] text-zinc-500">
+                {fetchSteps.slice(0, -1).map((s, i) => (
+                  <li key={`${i}-${s}`} className="flex items-start gap-1.5 truncate">
+                    <Check className="w-3 h-3 mt-0.5 text-emerald-500/70 shrink-0" />
+                    <span className="truncate">{s}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {fetchElapsed >= 20 && (
+              <p className="text-[11px] text-amber-300/90">
+                Still working — X sometimes throttles anonymous requests, fallbacks can take up to ~45s.
+              </p>
+            )}
+
+            <button
+              type="button"
+              onClick={cancelUrlFetch}
+              className="self-end flex items-center gap-1 text-[11px] font-semibold text-zinc-300 hover:text-white"
+            >
+              <Ban className="w-3.5 h-3.5" />
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* URL Fetch Error Card */}
+        {!isFetchingUrl && fetchError && (
+          <div className="flex items-start justify-between gap-2 p-3.5 rounded-2xl bg-red-950/85 backdrop-blur-2xl border border-red-500/40 text-xs text-red-100 shadow-2xl">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-red-200">Couldn't fetch media</p>
+                <p className="text-[11px] text-red-200/90 mt-0.5 leading-relaxed">{fetchError}</p>
+                {inputUrl.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => fetchAndPreviewFromUrl(inputUrl)}
+                    className="mt-2 flex items-center gap-1 text-[11px] font-semibold text-white underline"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Retry
+                  </button>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFetchError(null)}
+              className="text-red-300 hover:text-white p-0.5"
+              aria-label="Dismiss error"
+            >
+              <X className="w-4 h-4" />
             </button>
           </div>
         )}
