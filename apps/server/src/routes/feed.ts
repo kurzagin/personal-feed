@@ -35,7 +35,7 @@ export function createFeedRoutes(
         postId: t.String(),
       })
     })
-    .post("/storage/cleanup-orphans", async ({ body }) => {
+    .post("/storage/cleanup-orphans", async ({ body, set }) => {
       if (!storage) {
         return { success: false, message: "Storage not configured" };
       }
@@ -43,15 +43,23 @@ export function createFeedRoutes(
       if (!keys || keys.length === 0) {
         return { success: true, count: 0 };
       }
-      await storage.deleteEncryptedObjects(keys);
-      return { success: true, count: keys.length };
+      const validKeys = keys.filter(
+        (k) => typeof k === "string" && k.startsWith("media/") && !k.includes("..") && !k.includes("\0")
+      );
+      if (validKeys.length !== keys.length) {
+        set.status = 400;
+        return { success: false, message: "Invalid storage keys: only media/ keys may be cleaned up" };
+      }
+      await storage.deleteEncryptedObjects(validKeys);
+      return { success: true, count: validKeys.length };
     }, {
       body: t.Object({
         keys: t.Array(t.String()),
       })
     })
     .get("/feed", ({ query }) => {
-      const limit = query.limit ? parseInt(query.limit, 10) : 10;
+      const parsedLimit = query.limit ? parseInt(query.limit, 10) : 10;
+      const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 200) : 10;
       const items = ranker.getRankedFeed(limit);
       return { items };
     }, {
@@ -60,7 +68,8 @@ export function createFeedRoutes(
       })
     })
     .get("/explore", ({ query }) => {
-      const limit = query.limit ? parseInt(query.limit, 10) : undefined;
+      const parsedLimit = query.limit ? parseInt(query.limit, 10) : undefined;
+      const limit = parsedLimit !== undefined && Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : undefined;
       const items = ranker.getChronologicalPosts(limit);
       return { items };
     }, {

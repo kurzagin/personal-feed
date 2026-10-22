@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync, copyFileSync, unlinkSync } from "node:fs";
+import { existsSync, writeFileSync, copyFileSync, unlinkSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { createDecipheriv } from "node:crypto";
 import { Database } from "bun:sqlite";
@@ -70,7 +70,7 @@ async function run() {
   // Test opening the DB to confirm integrity
   const tempPath = join(process.cwd(), `.pulled_test_${Date.now()}.db`);
   try {
-    writeFileSync(tempPath, decrypted);
+    writeFileSync(tempPath, decrypted, { mode: 0o600 });
     const testDb = new Database(tempPath, { readonly: true });
     const check = testDb.query("PRAGMA integrity_check;").get() as { integrity_check?: string } | null;
     testDb.close();
@@ -91,6 +91,9 @@ async function run() {
     const backupPath = `${dbPath}.backup_before_pull_${Date.now()}`;
     console.log(`💾 Existing local DB backed up to: ${backupPath}`);
     copyFileSync(dbPath, backupPath);
+    try {
+      chmodSync(backupPath, 0o600);
+    } catch {}
 
     // Clean up old wal/shm if present to avoid corruption with replaced main file
     if (existsSync(`${dbPath}-wal`)) unlinkSync(`${dbPath}-wal`);
@@ -98,7 +101,7 @@ async function run() {
   }
 
   // Write new database
-  writeFileSync(dbPath, decrypted);
+  writeFileSync(dbPath, decrypted, { mode: 0o600 });
   console.log(`🎉 Database pulled and restored successfully to ${dbPath}! (${(decrypted.length / 1024 / 1024).toFixed(2)} MB)`);
 }
 

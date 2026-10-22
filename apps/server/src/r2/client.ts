@@ -1,6 +1,6 @@
 import { S3Client, GetObjectCommand, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 
 export interface R2Config {
   accountId: string;
@@ -16,7 +16,7 @@ export class StorageProvider {
 
   constructor(config?: Partial<R2Config>) {
     this.bucket = config?.bucketName || process.env.R2_BUCKET || "personal-feed-encrypted";
-    this.localFallbackDir = join(process.cwd(), ".local_storage");
+    this.localFallbackDir = resolve(process.cwd(), ".local_storage");
 
     const isPlaceholder = config?.accountId?.includes("your_") || config?.accessKeyId?.includes("your_");
     if (config?.accountId && config?.accessKeyId && config?.secretAccessKey && !isPlaceholder) {
@@ -30,9 +30,21 @@ export class StorageProvider {
       });
     } else {
       if (!existsSync(this.localFallbackDir)) {
-        mkdirSync(this.localFallbackDir, { recursive: true });
+        mkdirSync(this.localFallbackDir, { recursive: true, mode: 0o700 });
       }
     }
+  }
+
+  private resolveLocalPath(key: string): string {
+    if (!key || key.includes("\0") || key.includes("..")) {
+      throw new Error(`Invalid storage key: ${key}`);
+    }
+    const safeName = key.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const targetPath = resolve(this.localFallbackDir, safeName);
+    if (!targetPath.startsWith(this.localFallbackDir + "/")) {
+      throw new Error(`Invalid storage path traversal attempt: ${key}`);
+    }
+    return targetPath;
   }
 
   async putEncryptedObject(key: string, data: Buffer): Promise<void> {
@@ -47,8 +59,8 @@ export class StorageProvider {
       );
     } else {
       // Local encrypted mock storage
-      const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
-      writeFileSync(filePath, data);
+      const filePath = this.resolveLocalPath(key);
+      writeFileSync(filePath, data, { mode: 0o600 });
     }
   }
 
@@ -62,7 +74,7 @@ export class StorageProvider {
           })
         );
       } else {
-        const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
+        const filePath = this.resolveLocalPath(key);
         if (existsSync(filePath)) {
           unlinkSync(filePath);
         }
@@ -92,7 +104,7 @@ export class StorageProvider {
       const bytes = await res.Body?.transformToByteArray();
       return bytes ? Buffer.from(bytes) : Buffer.alloc(0);
     } else {
-      const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
+      const filePath = this.resolveLocalPath(key);
       if (!existsSync(filePath)) {
         throw new Error(`Storage key not found: ${key}`);
       }
@@ -113,7 +125,7 @@ export class StorageProvider {
       return bytes ? Buffer.from(bytes) : Buffer.alloc(0);
     } else {
       // Local fallback range read
-      const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
+      const filePath = this.resolveLocalPath(key);
       const full = readFileSync(filePath);
       return full.subarray(startByte, Math.min(endByte + 1, full.length));
     }
@@ -129,7 +141,7 @@ export class StorageProvider {
       );
       return res.ContentLength || 0;
     } else {
-      const filePath = join(this.localFallbackDir, key.replace(/\//g, "_"));
+      const filePath = this.resolveLocalPath(key);
       const full = readFileSync(filePath);
       return full.length;
     }
