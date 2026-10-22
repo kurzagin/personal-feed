@@ -238,6 +238,64 @@ export class FeedRanker {
   }
 
   /**
+   * Fetches posts in chronological order (latest to oldest, created_at DESC) without algorithm scoring.
+   */
+  getChronologicalPosts(limit?: number): (Post & { tags: Tag[] })[] {
+    const queryStr = `
+      SELECT 
+        p.*,
+        GROUP_CONCAT(t.id || ':' || t.name || ':' || t.category, ';') as raw_tags
+      FROM posts p
+      LEFT JOIN post_tags pt ON p.id = pt.post_id
+      LEFT JOIN tags t ON pt.tag_id = t.id
+      GROUP BY p.id
+      ORDER BY p.created_at DESC
+      ${limit ? `LIMIT ${limit}` : ""}
+    `;
+
+    const rawPosts = this.db.query(queryStr).all() as any[];
+    if (rawPosts.length === 0) return [];
+
+    const allItems = this.db.query(`
+      SELECT * FROM post_items ORDER BY item_index ASC
+    `).all() as any[];
+    const itemsByPost = new Map<string, any[]>();
+    for (const item of allItems) {
+      if (!itemsByPost.has(item.post_id)) {
+        itemsByPost.set(item.post_id, []);
+      }
+      itemsByPost.get(item.post_id)!.push(item);
+    }
+
+    return rawPosts.map((p) => {
+      const tags: Tag[] = p.raw_tags
+        ? p.raw_tags.split(";").map((str: string) => {
+            const [id, name, category] = str.split(":");
+            return { id: Number(id), name, category: category as TagCategory };
+          })
+        : [];
+
+      return {
+        id: p.id,
+        media_type: p.media_type,
+        duration_seconds: p.duration_seconds,
+        aspect_ratio: p.aspect_ratio,
+        page_count: p.page_count,
+        r2_storage_key: p.r2_storage_key,
+        encrypted_key: p.encrypted_key,
+        content_hash: p.content_hash,
+        created_at: p.created_at,
+        rating: p.rating,
+        hls_segment_count: p.hls_segment_count,
+        has_scrub_sheet: Boolean(p.has_scrub_sheet),
+        has_thumbnail_grid: Boolean(p.has_thumbnail_grid),
+        tags,
+        items: itemsByPost.get(p.id) || [],
+      };
+    });
+  }
+
+  /**
    * Two-Stage Feed Retrieval & Re-ranking:
    * Stage 1 (Retrieval): Indexed candidate selection (top user tags + fresh unviewed posts)
    * Stage 2 (Scoring & Re-ranking): Vector Cosine similarity + UCB1 + MMR Diversity

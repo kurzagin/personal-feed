@@ -41,6 +41,7 @@ export const App: React.FC = () => {
     }
   });
   const [posts, setPosts] = useState<(Post & { tags: Tag[] })[]>([]);
+  const [explorePosts, setExplorePosts] = useState<(Post & { tags: Tag[] })[]>([]);
   const [editingPost, setEditingPost] = useState<(Post & { tags: Tag[] }) | null>(null);
   const [activeIndex, setActiveIndex] = useState<number>(0);
   const [isMuted, setIsMuted] = useState<boolean>(true);
@@ -71,9 +72,22 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const fetchExplore = useCallback(async () => {
+    try {
+      const res = await fetch("/api/explore");
+      const data = await res.json();
+      if (data.items) {
+        setExplorePosts(data.items);
+      }
+    } catch (err) {
+      console.error("Failed to load explore posts", err);
+    }
+  }, []);
+
   useEffect(() => {
     fetchFeed();
-  }, [fetchFeed]);
+    fetchExplore();
+  }, [fetchFeed, fetchExplore]);
 
   // Filtered feed posts when user clicks a tag pill
   const displayedPosts = useMemo(() => {
@@ -650,15 +664,28 @@ export const App: React.FC = () => {
         {/* VIEW 2: EXPLORE BENTO / MASONRY GRID */}
         {tab === "explore" && (
           <ExploreView
-            posts={posts}
+            posts={explorePosts}
             activeTagFilter={activeTagFilter}
             onChangeTagFilter={setActiveTagFilter}
-            onRefresh={fetchFeed}
-            onSelectPost={(postIdx) => {
-              // Clear filter if selecting by global index so index matches displayedPosts
+            onRefresh={fetchExplore}
+            onSelectPost={(selectedPost) => {
+              // Clear filter so index matches displayedPosts
               setActiveTagFilter(null);
-              pendingScrollIndexRef.current = postIdx;
-              setActiveIndex(postIdx);
+              // Ensure the selected post is present in feed posts
+              setPosts((prevFeedPosts) => {
+                const existingIdx = prevFeedPosts.findIndex((p) => p.id === selectedPost.id);
+                if (existingIdx !== -1) {
+                  pendingScrollIndexRef.current = existingIdx;
+                  setActiveIndex(existingIdx);
+                  return prevFeedPosts;
+                } else {
+                  // Prepend the selected post to the feed
+                  const newFeed = [selectedPost, ...prevFeedPosts];
+                  pendingScrollIndexRef.current = 0;
+                  setActiveIndex(0);
+                  return newFeed;
+                }
+              });
               setTab("feed");
             }}
           />
@@ -672,6 +699,7 @@ export const App: React.FC = () => {
                 setBgUploadSnap(null);
                 setTab("feed");
                 fetchFeed();
+                fetchExplore();
               }}
               onCancel={() => {
                 setTab("feed");
@@ -688,6 +716,11 @@ export const App: React.FC = () => {
               onSave={(updatedTags) => {
                 setPosts((prevPosts) =>
                   prevPosts.map((p) =>
+                    p.id === editingPost.id ? { ...p, tags: updatedTags } : p
+                  )
+                );
+                setExplorePosts((prevExplore) =>
+                  prevExplore.map((p) =>
                     p.id === editingPost.id ? { ...p, tags: updatedTags } : p
                   )
                 );
