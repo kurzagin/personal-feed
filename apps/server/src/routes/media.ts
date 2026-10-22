@@ -66,10 +66,11 @@ export function createMediaRoutes(db: Database, storage: StorageProvider, master
 
     // Range request: "bytes=start-end"
     const parts = rangeHeader.replace(/bytes=/, "").split("-");
-    const plainStart = parseInt(parts[0], 10);
+    const parsedStart = parseInt(parts[0], 10);
+    const plainStart = Number.isFinite(parsedStart) && parsedStart >= 0 ? parsedStart : 0;
     
     // Determine starting chunk
-    const startChunkIdx = Math.floor(plainStart / CHUNK_SIZE);
+    const startChunkIdx = Math.min(Math.floor(plainStart / CHUNK_SIZE), Math.max(0, numChunks - 1));
     const encStartOffset = startChunkIdx * encChunkSize;
     
     // Fetch up to 2 chunks (~4MB) at once for responsive buffering
@@ -161,6 +162,10 @@ export function createMediaRoutes(db: Database, storage: StorageProvider, master
       }
 
       const segIdx = parseInt(segmentIndex.replace(".ts", ""), 10);
+      if (!Number.isInteger(segIdx) || segIdx < 0) {
+        set.status = 400;
+        return { error: "Invalid segment index" };
+      }
       const contentKey = unwrapContentKey(entity.encrypted_key, masterKey);
       const segKey = `media/${storageKeyId}/hls/${segIdx}.enc`;
 
@@ -170,7 +175,7 @@ export function createMediaRoutes(db: Database, storage: StorageProvider, master
 
         set.headers["Content-Type"] = "video/MP2T";
         set.headers["Content-Length"] = decryptedSeg.length.toString();
-        set.headers["Cache-Control"] = "public, max-age=31536000, immutable";
+        set.headers["Cache-Control"] = "private, max-age=31536000, immutable";
         return new Response(decryptedSeg);
       } catch (err: any) {
         set.status = 404;
@@ -193,7 +198,7 @@ export function createMediaRoutes(db: Database, storage: StorageProvider, master
         const decData = decryptBlob(encData, contentKey);
 
         set.headers["Content-Type"] = "image/webp";
-        set.headers["Cache-Control"] = "public, max-age=86400";
+        set.headers["Cache-Control"] = "private, max-age=86400";
         return new Response(decData);
       } catch {
         // Fallback to primary stream
@@ -209,6 +214,10 @@ export function createMediaRoutes(db: Database, storage: StorageProvider, master
       }
 
       const sIdx = parseInt(sheetIndex.replace(".webp", ""), 10);
+      if (!Number.isInteger(sIdx) || sIdx < 0) {
+        set.status = 400;
+        return { error: "Invalid sheet index" };
+      }
       const contentKey = unwrapContentKey(entity.encrypted_key, masterKey);
       const sheetKey = `media/${storageKeyId}/scrub/${sIdx}.enc`;
 
@@ -217,7 +226,7 @@ export function createMediaRoutes(db: Database, storage: StorageProvider, master
         const decData = decryptBlob(encData, contentKey);
 
         set.headers["Content-Type"] = "image/webp";
-        set.headers["Cache-Control"] = "public, max-age=31536000, immutable";
+        set.headers["Cache-Control"] = "private, max-age=31536000, immutable";
         return new Response(decData);
       } catch (err: any) {
         set.status = 404;
@@ -240,7 +249,7 @@ export function createMediaRoutes(db: Database, storage: StorageProvider, master
         const decData = decryptBlob(encData, contentKey);
 
         set.headers["Content-Type"] = "text/vtt; charset=utf-8";
-        set.headers["Cache-Control"] = "public, max-age=86400";
+        set.headers["Cache-Control"] = "private, max-age=86400";
         return new Response(decData);
       } catch (err: any) {
         set.status = 404;

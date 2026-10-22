@@ -241,6 +241,10 @@ export class FeedRanker {
    * Fetches posts in chronological order (latest to oldest, created_at DESC) without algorithm scoring.
    */
   getChronologicalPosts(limit?: number): (Post & { tags: Tag[] })[] {
+    const safeLimit =
+      limit !== undefined && Number.isFinite(limit) && limit > 0
+        ? Math.floor(limit)
+        : undefined;
     const queryStr = `
       SELECT 
         p.*,
@@ -250,10 +254,14 @@ export class FeedRanker {
       LEFT JOIN tags t ON pt.tag_id = t.id
       GROUP BY p.id
       ORDER BY p.created_at DESC
-      ${limit ? `LIMIT ${limit}` : ""}
+      ${safeLimit !== undefined ? "LIMIT ?" : ""}
     `;
 
-    const rawPosts = this.db.query(queryStr).all() as any[];
+    const rawPosts = (
+      safeLimit !== undefined
+        ? this.db.query(queryStr).all(safeLimit)
+        : this.db.query(queryStr).all()
+    ) as any[];
     if (rawPosts.length === 0) return [];
 
     const allItems = this.db.query(`

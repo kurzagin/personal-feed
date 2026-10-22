@@ -104,6 +104,54 @@ function detectMimeType(filePath: string): string {
 }
 
 /**
+ * Validates that a URL is a safe external HTTP(S) URL and blocks SSRF targets
+ * (loopback, link-local, private LAN IPs, non-HTTP protocols, and CLI flag prefixes).
+ */
+export function validateExternalMediaUrl(rawUrl: string): URL {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed.startsWith("-")) {
+    throw new Error("Invalid URL format");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("Invalid URL format");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Only http:// and https:// URLs are supported");
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error("URLs with embedded credentials are not allowed");
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host === "::1" ||
+    host === "::" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal") ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+    /^fe80:/i.test(host) ||
+    /^f[cd][0-9a-f]{2}:/i.test(host)
+  ) {
+    throw new Error("Local, private, or internal network URLs are not allowed");
+  }
+
+  return parsed;
+}
+
+/**
  * Downloads media from URL (X/Twitter, YouTube, direct media URLs) using gallery-dl or yt-dlp.
  */
 export async function downloadMediaFromUrl(
@@ -113,8 +161,9 @@ export async function downloadMediaFromUrl(
     onProgress?: (msg: string) => void;
   }
 ): Promise<UrlDownloadResult> {
+  const validatedUrl = validateExternalMediaUrl(targetUrl).toString();
   const tempDir = path.join(os.tmpdir(), `pf_url_${ulid()}`);
-  await fs.mkdir(tempDir, { recursive: true });
+  await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
 
   const cleanup = async () => {
     try {
@@ -122,7 +171,7 @@ export async function downloadMediaFromUrl(
     } catch {}
   };
 
-  const isTwitter = /x\.com|twitter\.com/i.test(targetUrl);
+  const isTwitter = /x\.com|twitter\.com/i.test(validatedUrl);
   let metadata: { title?: string; description?: string; tags: string[]; author?: string } = {
     tags: [],
   };
@@ -156,7 +205,7 @@ export async function downloadMediaFromUrl(
     galleryDlArgs.push("-o", `auth_token=${twitterAuthToken}`);
   }
 
-  galleryDlArgs.push(targetUrl);
+  galleryDlArgs.push("--", validatedUrl);
 
   await runCommand("gallery-dl", galleryDlArgs, {
     cwd: tempDir,
@@ -175,6 +224,7 @@ export async function downloadMediaFromUrl(
     options?.onProgress?.("Checking media streams with yt-dlp...");
     const ytDlpArgs = [
       "--no-playlist",
+      "--no-exec",
       "--socket-timeout",
       "10",
       "-f",
@@ -182,12 +232,13 @@ export async function downloadMediaFromUrl(
       "-o",
       path.join(tempDir, "%(id)s.%(ext)s"),
       "--write-info-json",
-      targetUrl,
     ];
 
     if (twitterCookiesPath) {
       ytDlpArgs.push("--cookies", twitterCookiesPath);
     }
+
+    ytDlpArgs.push("--", validatedUrl);
 
     await runCommand("yt-dlp", ytDlpArgs, {
       cwd: tempDir,
@@ -202,10 +253,10 @@ export async function downloadMediaFromUrl(
     downloadedFiles = await findFiles(tempDir);
   }
 
-  // Strategy 3: If still no files and it's an X/Twitter URL, try lightweight API resolver
-  if (downloadedFiles.length === 0 && isTwitter) {
+  // Strategy 3: If still no files and it's an X/Twitter URL, try lightweight API resolver (unless disabled for strict privacy)
+  if (downloadedFiles.length === 0 && isTwitter && process.env.DISABLE_VXTWITTER_FALLBACK !== "1") {
     options?.onProgress?.("Resolving X/Twitter post metadata via direct API...");
-    const statusMatch = targetUrl.match(/status\/(\d+)/i);
+    const statusMatch = validatedUrl.match(/status\/(\d+)/i);
     if (statusMatch) {
       const statusId = statusMatch[1];
       try {
@@ -242,14 +293,14 @@ export async function downloadMediaFromUrl(
           }
 
           for (let i = 0; i < mediaUrls.length; i++) {
-            const mUrl = mediaUrls[i];
+            const mUrl = validateExternalMediaUrl(mediaUrls[i]).toString();
             options?.onProgress?.(`Downloading item ${i + 1}/${mediaUrls.length}...`);
             const fileResp = await fetch(mUrl, { signal: options?.signal });
             if (fileResp.ok) {
               const arrayBuf = await fileResp.arrayBuffer();
               const ext = mUrl.includes(".mp4") ? ".mp4" : ".jpg";
               const outPath = path.join(tempDir, `x_media_${i}${ext}`);
-              await fs.writeFile(outPath, Buffer.from(arrayBuf));
+              await fs.writeFile(outPath, Buffer.from(arrayBuf), { mode: 0o600 });
               downloadedFiles.push(outPath);
             }
           }

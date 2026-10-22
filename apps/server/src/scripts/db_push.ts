@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes, createCipheriv } from "node:crypto";
 import { deriveMasterKey } from "@personal-feed/crypto";
@@ -35,8 +35,11 @@ async function run() {
     // Flush write-ahead log
     db.run("PRAGMA wal_checkpoint(TRUNCATE);");
     // Create clean isolated snapshot
-    db.run(`VACUUM INTO '${tempSnapshot}';`);
+    db.query("VACUUM INTO ?;").run(tempSnapshot);
     db.close();
+    try {
+      chmodSync(tempSnapshot, 0o600);
+    } catch {}
     console.log(`✅ Created clean SQLite snapshot (${(readFileSync(tempSnapshot).length / 1024 / 1024).toFixed(2)} MB)`);
 
     // 2. Encrypt snapshot using AES-256-GCM with masterKey
