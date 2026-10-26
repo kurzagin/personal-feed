@@ -9,8 +9,6 @@ import {
   Layers,
   Zap,
   Settings,
-  Maximize2,
-  Minimize2,
 } from "lucide-react";
 import Hls from "hls.js";
 
@@ -590,23 +588,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setFitMode((prev) => (prev === "contain" ? "cover" : "contain"));
-              }}
-              aria-label={fitMode === "contain" ? "Fill screen" : "Fit to screen"}
-              title={fitMode === "contain" ? "Fill screen (Zoom)" : "Fit to screen"}
-              className="p-3 rounded-full bg-black/40 backdrop-blur-xl border border-white/10 text-white/90 active:scale-90 transition shadow-lg hover:text-white"
-            >
-              {fitMode === "contain" ? (
-                <Maximize2 className="w-6 h-6" />
-              ) : (
-                <Minimize2 className="w-6 h-6 text-cyan-300" />
-              )}
-            </button>
-
             {isVideo && (
               <button
                 type="button"
@@ -740,29 +721,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
               </span>
             </div>
           )}
-
-          <div className="flex flex-col items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setFitMode((prev) => (prev === "contain" ? "cover" : "contain"))}
-              title={fitMode === "contain" ? "Fill screen (Zoom)" : "Fit to screen (Letterbox)"}
-              aria-label="Toggle fit mode"
-              className={`w-12 h-12 rounded-2xl border flex items-center justify-center transition active:scale-90 shadow-lg ${
-                fitMode === "cover"
-                  ? "bg-cyan-500/15 border-cyan-400/30 text-cyan-300"
-                  : "bg-zinc-900/90 hover:bg-zinc-800 border-white/10 text-white"
-              }`}
-            >
-              {fitMode === "contain" ? (
-                <Maximize2 className="w-5 h-5" />
-              ) : (
-                <Minimize2 className="w-5 h-5" />
-              )}
-            </button>
-            <span className="text-[10px] font-mono text-zinc-400">
-              {fitMode === "contain" ? "Fit" : "Fill"}
-            </span>
-          </div>
 
           {isVideo && (
             <div className="flex flex-col items-center gap-1.5">
