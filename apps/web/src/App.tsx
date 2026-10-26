@@ -26,39 +26,143 @@ import {
   getActiveUploadIdFromStorage,
   setActiveUploadIdInStorage,
 } from "./lib/uploadDraftStore";
+import {
+  type AppTab,
+  parseHash,
+  formatHash,
+} from "./lib/router";
 
 const ACTIVE_TAB_SESSION_KEY = "pf_active_tab";
-type AppTab = "feed" | "explore" | "upload" | "edit-tags" | "preferences";
 
 export const App: React.FC = () => {
-  const [tab, setTabState] = useState<AppTab>(() => {
+  const initialRoute = useMemo(() => {
+    if (typeof window !== "undefined" && window.location.hash) {
+      return parseHash(window.location.hash);
+    }
     try {
       const saved = sessionStorage.getItem(ACTIVE_TAB_SESSION_KEY);
-      if (saved === "upload" || saved === "explore" || saved === "preferences") return saved;
-      return "feed";
-    } catch {
-      return "feed";
-    }
-  });
+      if (saved === "upload" || saved === "explore" || saved === "preferences") {
+        return { tab: saved as AppTab, tagFilter: null };
+      }
+    } catch {}
+    return { tab: "feed" as AppTab, tagFilter: null };
+  }, []);
+
+  const [tab, setTabState] = useState<AppTab>(initialRoute.tab);
   const [posts, setPosts] = useState<(Post & { tags: Tag[] })[]>([]);
   const [explorePosts, setExplorePosts] = useState<(Post & { tags: Tag[] })[]>([]);
   const [editingPost, setEditingPost] = useState<(Post & { tags: Tag[] }) | null>(null);
   const [activeIndex, setActiveIndex] = useState<number>(0);
   const [isMuted, setIsMuted] = useState<boolean>(true);
-  const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
+  const [activeTagFilter, setActiveTagFilter] = useState<string | null>(initialRoute.tagFilter || null);
   const [bgUploadSnap, setBgUploadSnap] = useState<ServerProgressSnapshot | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollIndexRef = useRef<number | null>(null);
+  const savedScrollTopRef = useRef<number | null>(null);
+  const savedActiveIndexRef = useRef<number | null>(null);
 
-  const setTab = useCallback((nextTab: AppTab) => {
-    setTabState(nextTab);
-    try {
-      if (nextTab !== "edit-tags") {
-        sessionStorage.setItem(ACTIVE_TAB_SESSION_KEY, nextTab);
+  const navigateTo = useCallback(
+    (
+      nextTab: AppTab,
+      options?: {
+        editPostId?: string;
+        tagFilter?: string | null;
+        replace?: boolean;
       }
-    } catch {}
-  }, []);
+    ) => {
+      // If we're leaving feed, remember our scroll position before transition
+      if (tab === "feed" && containerRef.current) {
+        savedScrollTopRef.current = containerRef.current.scrollTop;
+        savedActiveIndexRef.current = activeIndex;
+      }
+
+      const targetTag =
+        options?.tagFilter !== undefined
+          ? options.tagFilter
+          : nextTab === "feed"
+          ? activeTagFilter
+          : null;
+      const targetHash = formatHash(nextTab, options?.editPostId, targetTag);
+
+      if (window.location.hash !== targetHash) {
+        if (options?.replace) {
+          window.history.replaceState(null, "", targetHash);
+        } else {
+          window.history.pushState(null, "", targetHash);
+        }
+      }
+
+      setTabState(nextTab);
+      if (options?.tagFilter !== undefined) {
+        setActiveTagFilter(options.tagFilter);
+      }
+      if (nextTab !== "edit-tags") {
+        setEditingPost(null);
+        try {
+          sessionStorage.setItem(ACTIVE_TAB_SESSION_KEY, nextTab);
+        } catch {}
+      }
+    },
+    [tab, activeIndex, activeTagFilter]
+  );
+
+  const goBack = useCallback(() => {
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      navigateTo("feed", { replace: true });
+    }
+  }, [navigateTo]);
+
+  // Synchronize hash on initial load if hash is empty
+  useEffect(() => {
+    if (typeof window !== "undefined" && !window.location.hash) {
+      const initialHash = formatHash(initialRoute.tab, undefined, initialRoute.tagFilter);
+      window.history.replaceState(null, "", initialHash);
+    }
+  }, [initialRoute]);
+
+  // Handle browser back/forward buttons & URL hash changes
+  useEffect(() => {
+    const handleRouteSync = () => {
+      const route = parseHash(window.location.hash);
+
+      setTabState((prevTab) => {
+        if (prevTab === "feed" && containerRef.current) {
+          savedScrollTopRef.current = containerRef.current.scrollTop;
+          savedActiveIndexRef.current = activeIndex;
+        }
+        return route.tab;
+      });
+
+      if (route.tagFilter !== undefined) {
+        setActiveTagFilter(route.tagFilter);
+      }
+
+      if (route.tab === "edit-tags" && route.editPostId) {
+        const match =
+          posts.find((p) => String(p.id) === String(route.editPostId)) ||
+          explorePosts.find((p) => String(p.id) === String(route.editPostId));
+        if (match) {
+          setEditingPost(match);
+        }
+      } else if (route.tab !== "edit-tags") {
+        setEditingPost(null);
+        try {
+          sessionStorage.setItem(ACTIVE_TAB_SESSION_KEY, route.tab);
+        } catch {}
+      }
+    };
+
+    window.addEventListener("popstate", handleRouteSync);
+    window.addEventListener("hashchange", handleRouteSync);
+
+    return () => {
+      window.removeEventListener("popstate", handleRouteSync);
+      window.removeEventListener("hashchange", handleRouteSync);
+    };
+  }, [posts, explorePosts, activeIndex]);
 
   const fetchFeed = useCallback(async () => {
     try {
@@ -89,6 +193,23 @@ export const App: React.FC = () => {
     fetchExplore();
   }, [fetchFeed, fetchExplore]);
 
+  // If page was loaded directly on #/edit-tags/:id, resolve post once posts load
+  useEffect(() => {
+    if (tab === "edit-tags" && !editingPost && (posts.length > 0 || explorePosts.length > 0)) {
+      const route = parseHash(window.location.hash);
+      if (route.editPostId) {
+        const match =
+          posts.find((p) => String(p.id) === String(route.editPostId)) ||
+          explorePosts.find((p) => String(p.id) === String(route.editPostId));
+        if (match) {
+          setEditingPost(match);
+        } else {
+          navigateTo("feed", { replace: true });
+        }
+      }
+    }
+  }, [tab, editingPost, posts, explorePosts, navigateTo]);
+
   // Filtered feed posts when user clicks a tag pill
   const displayedPosts = useMemo(() => {
     if (!activeTagFilter) return posts;
@@ -109,18 +230,29 @@ export const App: React.FC = () => {
         behavior,
       });
       setActiveIndex(clamped);
+      savedScrollTopRef.current = clamped * itemHeight;
+      savedActiveIndexRef.current = clamped;
     },
     [displayedPosts.length]
   );
 
-  // When switching from Explore Grid to Feed at a specific post index
+  // Restore or set scroll position when feed is active
   useEffect(() => {
-    if (tab === "feed" && pendingScrollIndexRef.current !== null && containerRef.current) {
-      const targetIdx = pendingScrollIndexRef.current;
-      pendingScrollIndexRef.current = null;
-      requestAnimationFrame(() => {
-        scrollToPostIndex(targetIdx, "instant");
-      });
+    if (tab === "feed" && containerRef.current) {
+      if (pendingScrollIndexRef.current !== null) {
+        const targetIdx = pendingScrollIndexRef.current;
+        pendingScrollIndexRef.current = null;
+        requestAnimationFrame(() => {
+          scrollToPostIndex(targetIdx, "instant");
+        });
+      } else if (savedScrollTopRef.current !== null) {
+        const savedTop = savedScrollTopRef.current;
+        requestAnimationFrame(() => {
+          if (containerRef.current) {
+            containerRef.current.scrollTop = savedTop;
+          }
+        });
+      }
     }
   }, [tab, scrollToPostIndex]);
 
@@ -177,7 +309,7 @@ export const App: React.FC = () => {
       if (cancelled) return;
 
       if (!activeServerJob && draft && draft.phase === "uploading" && draft.files.length > 0) {
-        setTab("upload");
+        navigateTo("upload", { replace: true });
         return;
       }
 
@@ -189,7 +321,7 @@ export const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [setTab]);
+  }, [navigateTo]);
 
   // Poll background server job when user is on Feed or Explore tabs
   useEffect(() => {
@@ -255,6 +387,7 @@ export const App: React.FC = () => {
   };
 
   const handleScroll = () => {
+    if (tab !== "feed") return;
     if (!containerRef.current) return;
     const container = containerRef.current;
     const scrollPosition = container.scrollTop;
@@ -264,6 +397,8 @@ export const App: React.FC = () => {
     if (newIndex !== activeIndex && newIndex >= 0 && newIndex < displayedPosts.length) {
       setActiveIndex(newIndex);
     }
+    savedScrollTopRef.current = scrollPosition;
+    savedActiveIndexRef.current = newIndex;
   };
 
   const handleRecordSession = async (
@@ -312,8 +447,16 @@ export const App: React.FC = () => {
           {/* Brand Header */}
           <div
             onClick={() => {
-              setTab("feed");
-              setActiveTagFilter(null);
+              if (tab === "feed") {
+                if (activeTagFilter) {
+                  setActiveTagFilter(null);
+                  navigateTo("feed", { tagFilter: null });
+                }
+                scrollToPostIndex(0, "smooth");
+              } else {
+                setActiveTagFilter(null);
+                navigateTo("feed", { tagFilter: null });
+              }
             }}
             className="flex items-center gap-3 px-2 cursor-pointer group"
           >
@@ -336,7 +479,17 @@ export const App: React.FC = () => {
           <nav aria-label="Desktop Navigation" className="flex flex-col gap-2">
             <button
               type="button"
-              onClick={() => setTab("feed")}
+              onClick={() => {
+                if (tab === "feed") {
+                  if (activeTagFilter) {
+                    setActiveTagFilter(null);
+                    navigateTo("feed", { tagFilter: null });
+                  }
+                  scrollToPostIndex(0, "smooth");
+                } else {
+                  navigateTo("feed");
+                }
+              }}
               className={`flex items-center justify-center lg:justify-start gap-3.5 px-3.5 py-3 rounded-2xl text-xs font-semibold transition cursor-pointer ${
                 tab === "feed"
                   ? "bg-white text-black shadow-lg shadow-white/10"
@@ -349,7 +502,7 @@ export const App: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => setTab("explore")}
+              onClick={() => navigateTo("explore")}
               className={`flex items-center justify-center lg:justify-start gap-3.5 px-3.5 py-3 rounded-2xl text-xs font-semibold transition cursor-pointer ${
                 tab === "explore"
                   ? "bg-white text-black shadow-lg shadow-white/10"
@@ -373,7 +526,7 @@ export const App: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => setTab("preferences")}
+              onClick={() => navigateTo("preferences")}
               className={`flex items-center justify-center lg:justify-start gap-3.5 px-3.5 py-3 rounded-2xl text-xs font-semibold transition cursor-pointer ${
                 tab === "preferences"
                   ? "bg-white text-black shadow-lg shadow-white/10"
@@ -386,7 +539,7 @@ export const App: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => setTab("upload")}
+              onClick={() => navigateTo("upload")}
               className={`flex items-center justify-center lg:justify-start gap-3.5 px-3.5 py-3 rounded-2xl text-xs font-semibold transition cursor-pointer mt-2 ${
                 tab === "upload"
                   ? "bg-gradient-to-r from-red-500 via-pink-500 to-cyan-500 text-white shadow-lg shadow-pink-500/20"
@@ -411,6 +564,7 @@ export const App: React.FC = () => {
                   onClick={() => {
                     setActiveTagFilter(null);
                     setActiveIndex(0);
+                    navigateTo("feed", { tagFilter: null });
                   }}
                   className="text-cyan-300 hover:text-white"
                   title="Clear filter"
@@ -429,7 +583,7 @@ export const App: React.FC = () => {
         <div className="flex flex-col gap-4">
           {bgUploadSnap && tab !== "upload" && (
             <div
-              onClick={() => setTab("upload")}
+              onClick={() => navigateTo("upload")}
               className="cursor-pointer p-3 rounded-2xl bg-zinc-900/90 border border-white/15 hover:border-cyan-400/40 transition flex flex-col gap-2 shadow-xl"
             >
               <div className="flex items-center justify-between gap-2">
@@ -492,7 +646,7 @@ export const App: React.FC = () => {
         {/* Mobile Floating Background Upload Pill */}
         {tab !== "upload" && bgUploadSnap && (
           <div
-            onClick={() => setTab("upload")}
+            onClick={() => navigateTo("upload")}
             className="md:hidden absolute top-3 left-3 right-3 z-50 cursor-pointer p-2.5 rounded-2xl bg-zinc-950/90 backdrop-blur-2xl border border-white/15 shadow-2xl flex flex-col gap-1.5 transition hover:border-white/30"
           >
             <div className="flex items-center justify-between gap-2">
@@ -535,6 +689,7 @@ export const App: React.FC = () => {
               onClick={() => {
                 setActiveTagFilter(null);
                 setActiveIndex(0);
+                navigateTo("feed", { tagFilter: null });
               }}
               className="p-0.5 rounded-full bg-white/10 hover:bg-white/20 text-white"
             >
@@ -551,122 +706,130 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* VIEW 1: IMMERSIVE VERTICAL FEED */}
-        {tab === "feed" && (
-          <div className="relative w-full h-full flex-1 overflow-hidden">
-            <div
-              ref={containerRef}
-              onScroll={handleScroll}
-              className="feed-container w-full h-full overflow-y-scroll overflow-x-hidden relative"
-            >
-              {displayedPosts.length === 0 ? (
-                <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center text-zinc-500 gap-3">
-                  <Compass className="w-10 h-10 opacity-40 animate-pulse text-cyan-400" />
-                  <p className="text-sm text-zinc-300 font-medium">
-                    {activeTagFilter
-                      ? `No posts tagged with #${activeTagFilter}`
-                      : "No media discovered yet."}
-                  </p>
-                  {activeTagFilter ? (
-                    <button
-                      type="button"
-                      onClick={() => setActiveTagFilter(null)}
-                      className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-xs text-white font-medium transition"
-                    >
-                      Clear Tag Filter
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setTab("upload")}
-                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-red-500 via-pink-500 to-cyan-500 text-xs text-white font-semibold shadow-lg transition"
-                    >
-                      Upload Your First Post
-                    </button>
-                  )}
-                </div>
-              ) : (
-                displayedPosts.map((post, idx) => (
-                  <div key={post.id} className="w-full h-full">
-                    <FeedCard
-                      post={post}
-                      isActive={idx === activeIndex}
-                      isMuted={isMuted}
-                      onToggleMute={() => setIsMuted((prev) => !prev)}
-                      onTagClick={(tagName) => {
-                        setActiveTagFilter((prev) =>
-                          prev === tagName ? null : tagName
-                        );
-                        setActiveIndex(0);
-                        if (containerRef.current) {
-                          containerRef.current.scrollTo({ top: 0 });
-                        }
-                      }}
-                      onOpenSettings={() => {
-                        setEditingPost(post);
-                        setTab("edit-tags");
-                      }}
-                      onRecordSession={(stats) =>
-                        handleRecordSession(post.id, stats)
-                      }
-                    />
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* DESKTOP ONLY: Floating Prev / Next Post & Refresh Controls on Right Edge */}
-            {displayedPosts.length > 1 && (
-              <div className="hidden md:flex flex-col items-center gap-2.5 absolute right-6 top-1/2 -translate-y-1/2 z-30">
-                <button
-                  type="button"
-                  disabled={activeIndex === 0}
-                  onClick={() => scrollToPostIndex(activeIndex - 1, "smooth")}
-                  title="Previous Post (↑ or K)"
-                  aria-label="Previous Post"
-                  className="w-11 h-11 rounded-full bg-zinc-900/85 hover:bg-zinc-800 backdrop-blur-xl border border-white/10 flex items-center justify-center text-white active:scale-90 transition disabled:opacity-25 disabled:pointer-events-none shadow-xl cursor-pointer"
-                >
-                  <ChevronUp className="w-5 h-5" />
-                </button>
-
-                <div className="px-2 py-1 rounded-full bg-zinc-900/70 border border-white/5 text-[10px] font-mono text-zinc-400">
-                  {activeIndex + 1}/{displayedPosts.length}
-                </div>
-
-                <button
-                  type="button"
-                  disabled={activeIndex >= displayedPosts.length - 1}
-                  onClick={() => scrollToPostIndex(activeIndex + 1, "smooth")}
-                  title="Next Post (↓ or J)"
-                  aria-label="Next Post"
-                  className="w-11 h-11 rounded-full bg-zinc-900/85 hover:bg-zinc-800 backdrop-blur-xl border border-white/10 flex items-center justify-center text-white active:scale-90 transition disabled:opacity-25 disabled:pointer-events-none shadow-xl cursor-pointer"
-                >
-                  <ChevronDown className="w-5 h-5" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    fetchFeed();
-                    scrollToPostIndex(0, "smooth");
-                  }}
-                  title="Refresh Ranked Feed"
-                  aria-label="Refresh Ranked Feed"
-                  className="mt-2 w-9 h-9 rounded-full bg-zinc-900/60 hover:bg-zinc-800 border border-white/10 flex items-center justify-center text-zinc-400 hover:text-cyan-300 active:scale-90 transition shadow-lg cursor-pointer"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </button>
+        {/* VIEW 1: IMMERSIVE VERTICAL FEED (Kept mounted during edit-tags to preserve scroll & video state) */}
+        <div
+          className={`relative w-full h-full flex-1 overflow-hidden ${
+            tab === "feed" || tab === "edit-tags" ? "block" : "hidden"
+          }`}
+        >
+          <div
+            ref={containerRef}
+            onScroll={handleScroll}
+            className="feed-container w-full h-full overflow-y-scroll overflow-x-hidden relative"
+          >
+            {displayedPosts.length === 0 ? (
+              <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center text-zinc-500 gap-3">
+                <Compass className="w-10 h-10 opacity-40 animate-pulse text-cyan-400" />
+                <p className="text-sm text-zinc-300 font-medium">
+                  {activeTagFilter
+                    ? `No posts tagged with #${activeTagFilter}`
+                    : "No media discovered yet."}
+                </p>
+                {activeTagFilter ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTagFilter(null);
+                      navigateTo("feed", { tagFilter: null });
+                    }}
+                    className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-xs text-white font-medium transition"
+                  >
+                    Clear Tag Filter
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => navigateTo("upload")}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-red-500 via-pink-500 to-cyan-500 text-xs text-white font-semibold shadow-lg transition"
+                  >
+                    Upload Your First Post
+                  </button>
+                )}
               </div>
+            ) : (
+              displayedPosts.map((post, idx) => (
+                <div key={post.id} className="w-full h-full">
+                  <FeedCard
+                    post={post}
+                    isActive={tab === "feed" && idx === activeIndex}
+                    isMuted={isMuted}
+                    onToggleMute={() => setIsMuted((prev) => !prev)}
+                    onTagClick={(tagName) => {
+                      const nextTag = activeTagFilter === tagName ? null : tagName;
+                      setActiveTagFilter(nextTag);
+                      setActiveIndex(0);
+                      if (containerRef.current) {
+                        containerRef.current.scrollTo({ top: 0 });
+                      }
+                      navigateTo("feed", { tagFilter: nextTag });
+                    }}
+                    onOpenSettings={() => {
+                      setEditingPost(post);
+                      navigateTo("edit-tags", { editPostId: post.id });
+                    }}
+                    onRecordSession={(stats) =>
+                      handleRecordSession(post.id, stats)
+                    }
+                  />
+                </div>
+              ))
             )}
           </div>
-        )}
+
+          {/* DESKTOP ONLY: Floating Prev / Next Post & Refresh Controls on Right Edge */}
+          {displayedPosts.length > 1 && tab === "feed" && (
+            <div className="hidden md:flex flex-col items-center gap-2.5 absolute right-6 top-1/2 -translate-y-1/2 z-30">
+              <button
+                type="button"
+                disabled={activeIndex === 0}
+                onClick={() => scrollToPostIndex(activeIndex - 1, "smooth")}
+                title="Previous Post (↑ or K)"
+                aria-label="Previous Post"
+                className="w-11 h-11 rounded-full bg-zinc-900/85 hover:bg-zinc-800 backdrop-blur-xl border border-white/10 flex items-center justify-center text-white active:scale-90 transition disabled:opacity-25 disabled:pointer-events-none shadow-xl cursor-pointer"
+              >
+                <ChevronUp className="w-5 h-5" />
+              </button>
+
+              <div className="px-2 py-1 rounded-full bg-zinc-900/70 border border-white/5 text-[10px] font-mono text-zinc-400">
+                {activeIndex + 1}/{displayedPosts.length}
+              </div>
+
+              <button
+                type="button"
+                disabled={activeIndex >= displayedPosts.length - 1}
+                onClick={() => scrollToPostIndex(activeIndex + 1, "smooth")}
+                title="Next Post (↓ or J)"
+                aria-label="Next Post"
+                className="w-11 h-11 rounded-full bg-zinc-900/85 hover:bg-zinc-800 backdrop-blur-xl border border-white/10 flex items-center justify-center text-white active:scale-90 transition disabled:opacity-25 disabled:pointer-events-none shadow-xl cursor-pointer"
+              >
+                <ChevronDown className="w-5 h-5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  fetchFeed();
+                  scrollToPostIndex(0, "smooth");
+                }}
+                title="Refresh Ranked Feed"
+                aria-label="Refresh Ranked Feed"
+                className="mt-2 w-9 h-9 rounded-full bg-zinc-900/60 hover:bg-zinc-800 border border-white/10 flex items-center justify-center text-zinc-400 hover:text-cyan-300 active:scale-90 transition shadow-lg cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* VIEW 2: EXPLORE BENTO / MASONRY GRID */}
         {tab === "explore" && (
           <ExploreView
             posts={explorePosts}
             activeTagFilter={activeTagFilter}
-            onChangeTagFilter={setActiveTagFilter}
+            onChangeTagFilter={(tag) => {
+              setActiveTagFilter(tag);
+              navigateTo("explore", { tagFilter: tag });
+            }}
             onRefresh={fetchExplore}
             onSelectPost={(selectedPost) => {
               // Clear filter so index matches displayedPosts
@@ -686,7 +849,7 @@ export const App: React.FC = () => {
                   return newFeed;
                 }
               });
-              setTab("feed");
+              navigateTo("feed", { tagFilter: null });
             }}
           />
         )}
@@ -697,20 +860,18 @@ export const App: React.FC = () => {
             <UploadView
               onSuccess={() => {
                 setBgUploadSnap(null);
-                setTab("feed");
+                navigateTo("feed", { tagFilter: null });
                 fetchFeed();
                 fetchExplore();
               }}
-              onCancel={() => {
-                setTab("feed");
-              }}
+              onCancel={goBack}
             />
           </div>
         )}
 
-        {/* VIEW 4: FULL-PAGE EDIT TAGS STUDIO */}
+        {/* VIEW 4: FULL-PAGE EDIT TAGS STUDIO (RENDERED AS OVERLAY TO PRESERVE FEED DOM) */}
         {tab === "edit-tags" && editingPost && (
-          <div className="w-full h-full flex-1 overflow-hidden">
+          <div className="absolute inset-0 z-50 w-full h-full overflow-hidden bg-black">
             <EditTagsView
               post={editingPost}
               onSave={(updatedTags) => {
@@ -726,13 +887,9 @@ export const App: React.FC = () => {
                 );
                 setToastMessage("Tags updated successfully");
                 setTimeout(() => setToastMessage(null), 3000);
-                setTab("feed");
-                setEditingPost(null);
+                goBack();
               }}
-              onCancel={() => {
-                setTab("feed");
-                setEditingPost(null);
-              }}
+              onCancel={goBack}
             />
           </div>
         )}
@@ -741,7 +898,7 @@ export const App: React.FC = () => {
         {tab === "preferences" && (
           <div className="w-full h-full flex-1 overflow-hidden">
             <PreferencesView
-              onBack={() => setTab("feed")}
+              onBack={goBack}
               onAlgorithmReset={() => {
                 fetchFeed();
                 setActiveIndex(0);
@@ -766,7 +923,17 @@ export const App: React.FC = () => {
         >
           <button
             type="button"
-            onClick={() => setTab("feed")}
+            onClick={() => {
+              if (tab === "feed") {
+                if (activeTagFilter) {
+                  setActiveTagFilter(null);
+                  navigateTo("feed", { tagFilter: null });
+                }
+                scrollToPostIndex(0, "smooth");
+              } else {
+                navigateTo("feed");
+              }
+            }}
             aria-label="Home Feed"
             className={`flex flex-col items-center justify-center gap-1 transition ${
               tab === "feed" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
@@ -778,7 +945,7 @@ export const App: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setTab("explore")}
+            onClick={() => navigateTo("explore")}
             aria-label="Explore Grid"
             className={`flex flex-col items-center justify-center gap-1 transition ${
               tab === "explore" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
@@ -791,7 +958,7 @@ export const App: React.FC = () => {
           {/* Center TikTok Plus Action */}
           <button
             type="button"
-            onClick={() => setTab("upload")}
+            onClick={() => navigateTo("upload")}
             aria-label="Create Post"
             className="flex items-center justify-center transition-transform active:scale-95"
           >
@@ -804,7 +971,7 @@ export const App: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setTab("preferences")}
+            onClick={() => navigateTo("preferences")}
             aria-label="Preferences"
             className={`flex flex-col items-center justify-center gap-1 transition ${
               tab === "preferences" ? "text-white" : "text-zinc-500 hover:text-zinc-300"

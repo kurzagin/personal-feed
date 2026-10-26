@@ -158,6 +158,20 @@ export const app = new Elysia()
     set.headers["Content-Type"] = "text/css; charset=utf-8";
     return existsSync(cssPath) ? readFileSync(cssPath, "utf-8") : "";
   })
+  .get("*", ({ request, set }) => {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/api/")) {
+      set.status = 404;
+      return { error: "Route not found" };
+    }
+    const indexPath = join(distDir, "index.html");
+    if (existsSync(indexPath)) {
+      set.headers["Content-Type"] = "text/html; charset=utf-8";
+      return readFileSync(indexPath, "utf-8");
+    }
+    set.status = 404;
+    return "Web build not found";
+  })
   .listen({
     hostname,
     port,
