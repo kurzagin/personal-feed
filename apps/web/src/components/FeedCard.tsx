@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import type { Post, Tag } from "@personal-feed/shared";
-import { TagCategoryColors } from "@personal-feed/shared";
 import {
   Volume2,
   VolumeX,
@@ -12,7 +11,6 @@ import {
   Settings,
   Maximize2,
   Minimize2,
-  Sparkles,
 } from "lucide-react";
 import Hls from "hls.js";
 
@@ -54,7 +52,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
   const [isFastForwarding, setIsFastForwarding] = useState<boolean>(false);
   const [naturalAspectRatio, setNaturalAspectRatio] = useState<number | null>(null);
   const [fitMode, setFitMode] = useState<"contain" | "cover">("contain");
-  const [showAllTags, setShowAllTags] = useState<boolean>(false);
 
   // 1-second scrubbing & desktop hover preview state
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
@@ -570,8 +567,8 @@ export const FeedCard: React.FC<FeedCardProps> = ({
             </>
           )}
 
-          {/* Bottom Vignette for Tags & Scrubber */}
-          <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-black/90 via-black/45 to-transparent pointer-events-none" />
+          {/* Bottom Vignette for Scrubber */}
+          <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/80 via-black/35 to-transparent pointer-events-none" />
 
           {/* MOBILE ONLY: Right Side Floating Action Bar */}
           <div
@@ -628,49 +625,6 @@ export const FeedCard: React.FC<FeedCardProps> = ({
               </button>
             )}
           </div>
-
-          {/* BOTTOM METADATA OVERLAY (Post Tag Pills) */}
-          {post.tags && post.tags.length > 0 && (
-            <div
-              data-no-stage-click
-              className={`absolute inset-x-4 ${
-                isVideo && duration > 0
-                  ? "bottom-24 md:bottom-12"
-                  : "bottom-20 md:bottom-5"
-              } right-16 md:right-4 z-20 flex flex-wrap items-center gap-1.5 pointer-events-auto`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0 mr-0.5 drop-shadow" />
-              {(showAllTags ? post.tags : post.tags.slice(0, 5)).map((t) => {
-                const colors =
-                  TagCategoryColors[t.category] || TagCategoryColors.general;
-                return (
-                  <button
-                    key={t.id || t.name}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTagClick?.(t.name);
-                    }}
-                    className={`text-[11px] px-2.5 py-0.5 rounded-full border backdrop-blur-md transition active:scale-95 ${colors.bg} ${colors.text} ${colors.border} hover:brightness-125 cursor-pointer`}
-                  >
-                    #{t.name}
-                  </button>
-                );
-              })}
-              {post.tags.length > 5 && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowAllTags((prev) => !prev);
-                  }}
-                  className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/15 hover:bg-white/25 text-white backdrop-blur-md transition cursor-pointer"
-                >
-                  {showAllTags ? "Show less" : `+${post.tags.length - 5} more`}
-                </button>
-              )}
-            </div>
-          )}
 
           {/* SLEEK BOTTOM SCRUBBER WITH HOVER & TOUCH 1S THUMBNAIL PREVIEW */}
           {isVideo && duration > 0 && (
