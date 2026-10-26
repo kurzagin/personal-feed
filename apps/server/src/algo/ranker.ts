@@ -322,12 +322,19 @@ export class FeedRanker {
 
   /**
    * Two-Stage Feed Retrieval & Re-ranking:
-   * Stage 1 (Retrieval): Indexed candidate selection (top user tags + fresh unviewed posts)
-   * Stage 2 (Scoring & Re-ranking): Vector Cosine similarity + UCB1 + MMR Diversity
+   * Stage 1 (Retrieval): Filter out excluded / already-seen posts, candidate selection
+   * Stage 2 (Scoring & Re-ranking): Vector Cosine similarity + UCB1 + MMR Diversity with Softmax/Temperature sampling
    */
-  getRankedFeed(limit: number = 15): (Post & { tags: Tag[] })[] {
+  getRankedFeed(
+    limit: number = 15,
+    options?: {
+      excludeIds?: string[];
+      refresh?: boolean;
+    }
+  ): (Post & { tags: Tag[] })[] {
     const now = Date.now();
     const tagAffinities = this.getUserTagAffinities();
+    const excludeSet = new Set(options?.excludeIds || []);
 
     // Stage 1: Candidate Generation (Fetch candidates with tag aggregation)
     const rawPosts = this.db.query(`
@@ -344,6 +351,13 @@ export class FeedRanker {
     `).all() as any[];
 
     if (rawPosts.length === 0) return [];
+
+    // Filter out posts already loaded in current feed session, unless pool is exhausted
+    let eligiblePosts = rawPosts.filter((p) => !excludeSet.has(p.id));
+    // Fallback: If excluded all posts, allow all posts so user has infinite loop
+    if (eligiblePosts.length === 0) {
+      eligiblePosts = rawPosts;
+    }
 
     const totalPosts = rawPosts.length;
     const tagIdf = this.getTagIdfMap(totalPosts);
@@ -389,8 +403,11 @@ export class FeedRanker {
     }
     const userNorm = Math.sqrt(userNormSq);
 
+    // Freshness / Refresh boost parameter: on explicit refresh or top scroll, give higher exploration & variability
+    const isRefresh = Boolean(options?.refresh);
+
     // Stage 2: Vectorize candidate posts and compute scores
-    const candidates: CandidatePost[] = rawPosts.map((p) => {
+    const candidates: CandidatePost[] = eligiblePosts.map((p) => {
       const tags: Tag[] = parseRawTags(p.raw_tags);
 
       // Build post TF-IDF vector with category weighting
@@ -420,10 +437,10 @@ export class FeedRanker {
 
       // B. UCB1 Exploration Bonus for Under-explored items
       const postViews = impressions.get(p.id) || 0;
-      const explorationFactor = 2.5;
+      const explorationFactor = isRefresh ? 4.5 : 2.5;
       const ucbScore = Math.min(
         explorationFactor * Math.sqrt(logTotalSessions / (postViews + 1)),
-        8.0
+        10.0
       );
 
       // C. Fatigue Penalties
@@ -431,18 +448,18 @@ export class FeedRanker {
       const lastSeen = recentViews.get(p.id);
       if (lastSeen) {
         const hoursAgo = (now - lastSeen) / (1000 * 60 * 60);
-        if (hoursAgo < 6) {
-          fatiguePenalty = 100;
+        if (hoursAgo < 1) {
+          fatiguePenalty = 12;
+        } else if (hoursAgo < 6) {
+          fatiguePenalty = 6;
         } else if (hoursAgo < 24) {
-          fatiguePenalty = 30;
-        } else if (hoursAgo < 72) {
-          fatiguePenalty = 10;
-        } else if (hoursAgo < 168) {
-          fatiguePenalty = 3;
+          fatiguePenalty = 2;
         }
       }
 
-      const jitter = (Math.random() - 0.5) * 0.4;
+      // Controlled exploratory noise to prevent fixed identical feeds while maintaining top quality
+      const jitterMagnitude = isRefresh ? 2.5 : 1.2;
+      const jitter = (Math.random() - 0.5) * jitterMagnitude;
       const finalScore = simScore + ucbScore - fatiguePenalty + jitter;
 
       return {
@@ -492,9 +509,10 @@ export class FeedRanker {
   }
 
   /**
-   * Greedy MMR Selection:
+   * MMR Selection with Top-K Softmax sampling:
    * MMR = lambda * Score(item) - (1 - lambda) * max_{selected} Sim(item, selected)
    * Prevents clustering of identical characters/artists while keeping quality high.
+   * Softmax sampling among top candidates breaks rigid determinism without losing relevance.
    */
   private selectDiverseBatch(
     candidates: CandidatePost[],
@@ -506,8 +524,8 @@ export class FeedRanker {
     let consecutiveLongVideos = 0;
 
     while (pool.length > 0 && selected.length < limit) {
-      let bestIdx = -1;
-      let bestMMRScore = -Infinity;
+      // Compute MMR scores for all remaining candidates in pool
+      const scoredCandidates: Array<{ index: number; mmr: number }> = [];
 
       for (let i = 0; i < pool.length; i++) {
         const item = pool[i];
@@ -527,15 +545,36 @@ export class FeedRanker {
 
         const redundancyPenalty = (1 - lambda) * (maxSimilarity * 8.0);
         const mmr = lambda * item.finalScore - redundancyPenalty;
-
-        if (mmr > bestMMRScore) {
-          bestMMRScore = mmr;
-          bestIdx = i;
-        }
+        scoredCandidates.push({ index: i, mmr });
       }
 
-      if (bestIdx === -1) {
-        bestIdx = 0;
+      if (scoredCandidates.length === 0) {
+        break;
+      }
+
+      // Sort scored candidates descending
+      scoredCandidates.sort((a, b) => b.mmr - a.mmr);
+
+      // Top-K sampling window (sample from top 3 candidates using softmax)
+      const topK = Math.min(3, scoredCandidates.length);
+      const topCandidates = scoredCandidates.slice(0, topK);
+
+      let bestIdx = topCandidates[0].index;
+      if (topCandidates.length > 1) {
+        // Temperature softmax sampling
+        const temperature = 0.8;
+        const maxScore = topCandidates[0].mmr;
+        const exps = topCandidates.map((c) => Math.exp((c.mmr - maxScore) / temperature));
+        const sumExp = exps.reduce((acc, v) => acc + v, 0);
+
+        let rand = Math.random() * sumExp;
+        for (let j = 0; j < topCandidates.length; j++) {
+          rand -= exps[j];
+          if (rand <= 0) {
+            bestIdx = topCandidates[j].index;
+            break;
+          }
+        }
       }
 
       const picked = pool.splice(bestIdx, 1)[0];

@@ -59,10 +59,16 @@ export const App: React.FC = () => {
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(initialRoute.tagFilter || null);
   const [bgUploadSnap, setBgUploadSnap] = useState<ServerProgressSnapshot | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const [isRefreshingFeed, setIsRefreshingFeed] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollIndexRef = useRef<number | null>(null);
   const savedScrollTopRef = useRef<number | null>(null);
   const savedActiveIndexRef = useRef<number | null>(null);
+  const postsRef = useRef<(Post & { tags: Tag[] })[]>([]);
+  postsRef.current = posts;
+  const isLoadingMoreRef = useRef<boolean>(false);
+  const hasMoreRef = useRef<boolean>(true);
 
   const navigateTo = useCallback(
     (
@@ -166,15 +172,57 @@ export const App: React.FC = () => {
     };
   }, [posts, explorePosts, activeIndex]);
 
-  const fetchFeed = useCallback(async () => {
+  const fetchFeed = useCallback(async (isRefresh: boolean = false) => {
     try {
-      const res = await fetch("/api/feed?limit=40");
+      if (isRefresh) {
+        setIsRefreshingFeed(true);
+      }
+      const res = await fetch(`/api/feed?limit=15${isRefresh ? "&refresh=true" : ""}`);
       const data = await res.json();
       if (data.items) {
         setPosts(data.items);
+        hasMoreRef.current = true;
       }
     } catch (err) {
       console.error("Failed to load feed", err);
+    } finally {
+      if (isRefresh) {
+        setIsRefreshingFeed(false);
+      }
+    }
+  }, []);
+
+  const fetchMorePosts = useCallback(async () => {
+    if (isLoadingMoreRef.current || !hasMoreRef.current) return;
+    isLoadingMoreRef.current = true;
+    setIsLoadingMore(true);
+
+    try {
+      const currentList = postsRef.current;
+      const excludeParam = currentList.map((p) => p.id).slice(-60).join(",");
+      const res = await fetch(`/api/feed?limit=15&exclude=${encodeURIComponent(excludeParam)}`);
+      const data = await res.json();
+
+      if (data.items && Array.isArray(data.items)) {
+        if (data.items.length === 0) {
+          hasMoreRef.current = false;
+        } else {
+          setPosts((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const newUnique = data.items.filter((p: any) => !existingIds.has(p.id));
+            if (newUnique.length === 0) {
+              // We've cycled through all available posts; still allow them to cycle
+              return [...prev, ...data.items];
+            }
+            return [...prev, ...newUnique];
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch more feed posts", err);
+    } finally {
+      isLoadingMoreRef.current = false;
+      setIsLoadingMore(false);
     }
   }, []);
 
@@ -401,6 +449,11 @@ export const App: React.FC = () => {
     }
     savedScrollTopRef.current = scrollPosition;
     savedActiveIndexRef.current = newIndex;
+
+    // Infinite feed: Prefetch next page when user reaches within 4 posts of the end
+    if (!activeTagFilter && displayedPosts.length > 0 && newIndex >= displayedPosts.length - 4) {
+      fetchMorePosts();
+    }
   };
 
   const handleRecordSession = async (
@@ -454,6 +507,7 @@ export const App: React.FC = () => {
                   setActiveTagFilter(null);
                   navigateTo("feed", { tagFilter: null });
                 }
+                fetchFeed(true);
                 scrollToPostIndex(0, "smooth");
               } else {
                 setActiveTagFilter(null);
@@ -487,6 +541,7 @@ export const App: React.FC = () => {
                     setActiveTagFilter(null);
                     navigateTo("feed", { tagFilter: null });
                   }
+                  fetchFeed(true);
                   scrollToPostIndex(0, "smooth");
                 } else {
                   navigateTo("feed");
@@ -498,7 +553,7 @@ export const App: React.FC = () => {
                   : "text-zinc-400 hover:text-white hover:bg-white/5"
               }`}
             >
-              <Home className="w-5 h-5 shrink-0" />
+              <Home className={`w-5 h-5 shrink-0 ${isRefreshingFeed ? "animate-spin text-cyan-500" : ""}`} />
               <span className="hidden lg:inline">For You Feed</span>
             </button>
 
@@ -823,14 +878,14 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  fetchFeed();
+                  fetchFeed(true);
                   scrollToPostIndex(0, "smooth");
                 }}
                 title="Refresh Ranked Feed"
                 aria-label="Refresh Ranked Feed"
                 className="mt-2 w-9 h-9 rounded-full bg-zinc-900/60 hover:bg-zinc-800 border border-white/10 flex items-center justify-center text-zinc-400 hover:text-cyan-300 active:scale-90 transition shadow-lg cursor-pointer"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className={`w-4 h-4 ${isRefreshingFeed ? "animate-spin text-cyan-400" : ""}`} />
               </button>
             </div>
           )}
@@ -961,6 +1016,8 @@ export const App: React.FC = () => {
                   setActiveTagFilter(null);
                   navigateTo("feed", { tagFilter: null });
                 }
+                // Refresh feed posts and scroll back to top smoothly
+                fetchFeed(true);
                 scrollToPostIndex(0, "smooth");
               } else {
                 navigateTo("feed");
@@ -971,7 +1028,7 @@ export const App: React.FC = () => {
               tab === "feed" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            <Home className="w-5 h-5 stroke-[2]" />
+            <Home className={`w-5 h-5 stroke-[2] ${isRefreshingFeed ? "animate-spin text-cyan-400" : ""}`} />
             <span className="text-[10px] font-medium tracking-wider">Feed</span>
           </button>
 

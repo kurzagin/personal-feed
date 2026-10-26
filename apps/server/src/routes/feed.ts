@@ -58,13 +58,17 @@ export function createFeedRoutes(
       })
     })
     .get("/feed", ({ query }) => {
-      const parsedLimit = query.limit ? parseInt(query.limit, 10) : 10;
-      const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 200) : 10;
-      const items = ranker.getRankedFeed(limit);
+      const parsedLimit = query.limit ? parseInt(query.limit, 10) : 15;
+      const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 200) : 15;
+      const excludeIds = query.exclude ? query.exclude.split(",").filter(Boolean) : undefined;
+      const refresh = query.refresh === "true" || query.refresh === "1";
+      const items = ranker.getRankedFeed(limit, { excludeIds, refresh });
       return { items };
     }, {
       query: t.Object({
         limit: t.Optional(t.String()),
+        exclude: t.Optional(t.String()),
+        refresh: t.Optional(t.String()),
       })
     })
     .get("/explore", ({ query }) => {
