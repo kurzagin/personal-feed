@@ -126,6 +126,7 @@ export const app = new Elysia()
     const indexPath = join(distDir, "index.html");
     if (existsSync(indexPath)) {
       set.headers["Content-Type"] = "text/html; charset=utf-8";
+      set.headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
       return readFileSync(indexPath, "utf-8");
     }
     set.status = 404;
