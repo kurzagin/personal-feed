@@ -450,8 +450,10 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
           let tag = db
             .query("SELECT id, category FROM tags WHERE name = ?")
             .get(t.name) as any;
+          const incomingCategory = t.category && t.category !== "general" ? t.category : undefined;
+
           if (!tag) {
-            const category = t.category || "general";
+            const category = incomingCategory || "general";
             db.query("INSERT INTO tags (name, category) VALUES (?, ?)").run(
               t.name,
               category
@@ -459,6 +461,12 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
             tag = db
               .query("SELECT id, category FROM tags WHERE name = ?")
               .get(t.name) as any;
+          } else if (incomingCategory && tag.category !== incomingCategory) {
+            db.query("UPDATE tags SET category = ? WHERE id = ?").run(
+              incomingCategory,
+              tag.id
+            );
+            tag.category = incomingCategory;
           }
           db.query(
             "INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)"
@@ -884,7 +892,9 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
             for (const rawTag of downloadResult.tags) {
               const clean = rawTag.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
               if (clean && !seen.has(clean)) {
-                autoTags.push({ name: clean, category: "general" });
+                const known = db.query("SELECT category FROM tags WHERE name = ?").get(clean) as any;
+                const category: TagCategory = (known?.category as TagCategory) || "general";
+                autoTags.push({ name: clean, category });
                 seen.add(clean);
               }
             }
@@ -893,7 +903,7 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
           if (downloadResult.author) {
             const cleanAuthor = downloadResult.author.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
             if (cleanAuthor && !autoTags.some((t) => t.name.toLowerCase() === cleanAuthor)) {
-              autoTags.push({ name: cleanAuthor, category: "creator" });
+              autoTags.push({ name: cleanAuthor, category: "artist" });
             }
           }
 
@@ -961,7 +971,9 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
               for (const rawTag of downloadResult.tags) {
                 const clean = rawTag.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
                 if (clean && !seen.has(clean)) {
-                  autoTags.push({ name: clean, category: "general" });
+                  const known = db.query("SELECT category FROM tags WHERE name = ?").get(clean) as any;
+                  const category: TagCategory = (known?.category as TagCategory) || "general";
+                  autoTags.push({ name: clean, category });
                   seen.add(clean);
                 }
               }
@@ -970,7 +982,7 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
             if (downloadResult.author) {
               const cleanAuthor = downloadResult.author.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
               if (cleanAuthor && !autoTags.some((t) => t.name.toLowerCase() === cleanAuthor)) {
-                autoTags.push({ name: cleanAuthor, category: "creator" });
+                autoTags.push({ name: cleanAuthor, category: "artist" });
               }
             }
 
@@ -1079,7 +1091,9 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
           for (const extTag of downloadResult.tags) {
             const clean = extTag.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
             if (clean && !existingNames.has(clean)) {
-              rawTags.push({ name: clean, category: "general" });
+              const known = db.query("SELECT category FROM tags WHERE name = ?").get(clean) as any;
+              const category: TagCategory = (known?.category as TagCategory) || "general";
+              rawTags.push({ name: clean, category });
               existingNames.add(clean);
             }
           }
@@ -1088,7 +1102,7 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
         if (downloadResult.author) {
           const cleanAuthor = downloadResult.author.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
           if (cleanAuthor && !rawTags.some((t) => t.name.toLowerCase() === cleanAuthor)) {
-            rawTags.push({ name: cleanAuthor, category: "creator" });
+            rawTags.push({ name: cleanAuthor, category: "artist" });
           }
         }
 
@@ -1218,8 +1232,10 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
             .query("SELECT id, category FROM tags WHERE name = ?")
             .get(tagName) as any;
 
+          const incomingCategory = t.category && t.category !== "general" ? t.category : undefined;
+
           if (!tag) {
-            const category = t.category || "general";
+            const category = incomingCategory || "general";
             db.query("INSERT INTO tags (name, category) VALUES (?, ?)").run(
               tagName,
               category
@@ -1227,6 +1243,12 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
             tag = db
               .query("SELECT id, category FROM tags WHERE name = ?")
               .get(tagName) as any;
+          } else if (incomingCategory && tag.category !== incomingCategory) {
+            db.query("UPDATE tags SET category = ? WHERE id = ?").run(
+              incomingCategory,
+              tag.id
+            );
+            tag.category = incomingCategory;
           }
 
           db.query(
@@ -1339,6 +1361,25 @@ export function createUploadRoutes(db: Database, storage: StorageProvider, maste
           id: t.Number(),
           category: t.String(),
         })),
+      }),
+    })
+    // Delete a tag globally and unlink from all posts
+    .delete("/admin/tags/:id", ({ params, set }) => {
+      const tagId = Number(params.id);
+      const existing = db.query("SELECT id FROM tags WHERE id = ?").get(tagId);
+      if (!existing) {
+        set.status = 404;
+        return { error: "Tag not found" };
+      }
+      const deleteTx = db.transaction(() => {
+        db.query("DELETE FROM post_tags WHERE tag_id = ?").run(tagId);
+        db.query("DELETE FROM tags WHERE id = ?").run(tagId);
+      });
+      deleteTx();
+      return { success: true };
+    }, {
+      params: t.Object({
+        id: t.String(),
       }),
     });
 }

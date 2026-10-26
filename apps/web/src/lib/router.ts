@@ -1,4 +1,4 @@
-export type AppTab = "feed" | "explore" | "upload" | "edit-tags" | "preferences";
+export type AppTab = "feed" | "explore" | "upload" | "edit-tags" | "preferences" | "tags";
 
 export interface AppRoute {
   tab: AppTab;
@@ -33,6 +33,9 @@ export function parseHash(hash: string): AppRoute {
   if (primary === "preferences") {
     return { tab: "preferences", tagFilter };
   }
+  if (primary === "tags") {
+    return { tab: "tags", tagFilter };
+  }
   return { tab: "feed", tagFilter };
 }
 
@@ -58,6 +61,9 @@ export function formatHash(
   }
   if (tab === "preferences") {
     return `#/preferences${queryStr}`;
+  }
+  if (tab === "tags") {
+    return `#/tags${queryStr}`;
   }
   return `#/feed${queryStr}`;
 }

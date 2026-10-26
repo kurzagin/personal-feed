@@ -34,9 +34,13 @@ const CATEGORIES: TagCategory[] = [
 
 interface TagDashboardCardProps {
   onTagsUpdated?: () => void;
+  onOpenFullPage?: () => void;
 }
 
-export const TagDashboardCard: React.FC<TagDashboardCardProps> = ({ onTagsUpdated }) => {
+export const TagDashboardCard: React.FC<TagDashboardCardProps> = ({
+  onTagsUpdated,
+  onOpenFullPage,
+}) => {
   const [tags, setTags] = useState<AdminTag[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -203,15 +207,29 @@ export const TagDashboardCard: React.FC<TagDashboardCardProps> = ({ onTagsUpdate
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => fetchActiveTags()}
-          disabled={loading}
-          className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition disabled:opacity-50"
-          title="Refresh Tags"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {onOpenFullPage && (
+            <button
+              type="button"
+              onClick={onOpenFullPage}
+              className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-xs font-medium transition flex items-center gap-1 border border-cyan-500/20"
+              title="Open full tags page"
+            >
+              <span>Full Page</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => fetchActiveTags()}
+            disabled={loading}
+            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition disabled:opacity-50"
+            title="Refresh Tags"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
       </div>
 
       {/* Toast Notification */}

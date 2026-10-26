@@ -23,6 +23,25 @@ const CATEGORY_WEIGHTS: Record<TagCategory, number> = {
   meta: 0.5,
 };
 
+function parseRawTags(raw: any): Tag[] {
+  if (!raw) return [];
+  try {
+    if (typeof raw === "string" && raw.trim().startsWith("[")) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((t: any) => t && t.id !== null && t.name)
+          .map((t: any) => ({
+            id: Number(t.id),
+            name: String(t.name),
+            category: t.category as TagCategory,
+          }));
+      }
+    }
+  } catch {}
+  return [];
+}
+
 export class FeedRanker {
   private db: Database;
 
@@ -248,7 +267,10 @@ export class FeedRanker {
     const queryStr = `
       SELECT 
         p.*,
-        GROUP_CONCAT(t.id || ':' || t.name || ':' || t.category, ';') as raw_tags
+        CASE 
+          WHEN COUNT(t.id) = 0 THEN '[]'
+          ELSE json_group_array(json_object('id', t.id, 'name', t.name, 'category', t.category))
+        END as raw_tags
       FROM posts p
       LEFT JOIN post_tags pt ON p.id = pt.post_id
       LEFT JOIN tags t ON pt.tag_id = t.id
@@ -276,12 +298,7 @@ export class FeedRanker {
     }
 
     return rawPosts.map((p) => {
-      const tags: Tag[] = p.raw_tags
-        ? p.raw_tags.split(";").map((str: string) => {
-            const [id, name, category] = str.split(":");
-            return { id: Number(id), name, category: category as TagCategory };
-          })
-        : [];
+      const tags: Tag[] = parseRawTags(p.raw_tags);
 
       return {
         id: p.id,
@@ -316,7 +333,10 @@ export class FeedRanker {
     const rawPosts = this.db.query(`
       SELECT 
         p.*,
-        GROUP_CONCAT(t.id || ':' || t.name || ':' || t.category, ';') as raw_tags
+        CASE 
+          WHEN COUNT(t.id) = 0 THEN '[]'
+          ELSE json_group_array(json_object('id', t.id, 'name', t.name, 'category', t.category))
+        END as raw_tags
       FROM posts p
       LEFT JOIN post_tags pt ON p.id = pt.post_id
       LEFT JOIN tags t ON pt.tag_id = t.id
@@ -371,12 +391,7 @@ export class FeedRanker {
 
     // Stage 2: Vectorize candidate posts and compute scores
     const candidates: CandidatePost[] = rawPosts.map((p) => {
-      const tags: Tag[] = p.raw_tags
-        ? p.raw_tags.split(";").map((str: string) => {
-            const [id, name, category] = str.split(":");
-            return { id: Number(id), name, category: category as TagCategory };
-          })
-        : [];
+      const tags: Tag[] = parseRawTags(p.raw_tags);
 
       // Build post TF-IDF vector with category weighting
       const vector = new Map<number, number>();

@@ -5,6 +5,7 @@ import { UploadView, type ServerProgressSnapshot } from "./components/UploadView
 import { ExploreView } from "./components/ExploreView";
 import { EditTagsView } from "./components/EditTagsView";
 import { PreferencesView } from "./components/PreferencesView";
+import { TagsManagerView } from "./components/TagsManagerView";
 import {
   Home,
   Plus,
@@ -19,6 +20,7 @@ import {
   X,
   RefreshCw,
   SlidersHorizontal,
+  Tag as TagIcon,
 } from "lucide-react";
 import {
   loadUploadDraft,
@@ -41,7 +43,7 @@ export const App: React.FC = () => {
     }
     try {
       const saved = sessionStorage.getItem(ACTIVE_TAB_SESSION_KEY);
-      if (saved === "upload" || saved === "explore" || saved === "preferences") {
+      if (saved === "upload" || saved === "explore" || saved === "preferences" || saved === "tags") {
         return { tab: saved as AppTab, tagFilter: null };
       }
     } catch {}
@@ -526,6 +528,19 @@ export const App: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => navigateTo("tags")}
+              className={`flex items-center justify-center lg:justify-start gap-3.5 px-3.5 py-3 rounded-2xl text-xs font-semibold transition cursor-pointer ${
+                tab === "tags"
+                  ? "bg-white text-black shadow-lg shadow-white/10"
+                  : "text-zinc-400 hover:text-white hover:bg-white/5"
+              }`}
+            >
+              <TagIcon className="w-5 h-5 shrink-0" />
+              <span className="hidden lg:inline">Active Tags</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => navigateTo("preferences")}
               className={`flex items-center justify-center lg:justify-start gap-3.5 px-3.5 py-3 rounded-2xl text-xs font-semibold transition cursor-pointer ${
                 tab === "preferences"
@@ -903,6 +918,23 @@ export const App: React.FC = () => {
                 fetchFeed();
                 setActiveIndex(0);
               }}
+              onOpenTagsManager={() => navigateTo("tags")}
+            />
+          </div>
+        )}
+
+        {/* VIEW 6: TAGS MANAGEMENT FULL PAGE */}
+        {tab === "tags" && (
+          <div className="w-full h-full flex-1 overflow-hidden">
+            <TagsManagerView
+              onBack={goBack}
+              onNavigateToExplore={(tagName) => {
+                navigateTo("explore", { tagFilter: tagName });
+              }}
+              onTagsUpdated={() => {
+                fetchFeed();
+                fetchExplore();
+              }}
             />
           </div>
         )}
@@ -915,7 +947,7 @@ export const App: React.FC = () => {
       {tab !== "upload" && tab !== "edit-tags" && (
         <nav
           aria-label="Bottom Navigation"
-          className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-black/95 border-t border-zinc-900/80 flex items-center justify-around z-50 px-6 backdrop-blur-md"
+          className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-black/95 border-t border-zinc-900/80 flex items-center justify-around z-50 px-4 backdrop-blur-md"
           style={{
             boxShadow: "0 -8px 24px rgba(0, 0, 0, 0.8)",
             paddingBottom: "env(safe-area-inset-bottom, 0px)",
@@ -967,6 +999,18 @@ export const App: React.FC = () => {
                 <Plus className="w-4 h-4 text-white stroke-[2.5]" />
               </div>
             </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigateTo("tags")}
+            aria-label="Active Tags"
+            className={`flex flex-col items-center justify-center gap-1 transition ${
+              tab === "tags" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <TagIcon className="w-5 h-5 stroke-[2]" />
+            <span className="text-[10px] font-medium tracking-wider">Tags</span>
           </button>
 
           <button

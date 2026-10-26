@@ -31,11 +31,13 @@ interface PreferencesStats {
 interface PreferencesViewProps {
   onBack: () => void;
   onAlgorithmReset: () => void;
+  onOpenTagsManager?: () => void;
 }
 
 export const PreferencesView: React.FC<PreferencesViewProps> = ({
   onBack,
   onAlgorithmReset,
+  onOpenTagsManager,
 }) => {
   const [stats, setStats] = useState<PreferencesStats | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -259,7 +261,7 @@ export const PreferencesView: React.FC<PreferencesViewProps> = ({
         </div>
 
         {/* Tag Management & Bulk Reclassification */}
-        <TagDashboardCard onTagsUpdated={fetchStats} />
+        <TagDashboardCard onTagsUpdated={fetchStats} onOpenFullPage={onOpenTagsManager} />
 
         {/* Storage Integrity & R2 Audit */}
         <StorageAuditCard />
