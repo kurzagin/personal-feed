@@ -250,7 +250,10 @@ export const TagsManagerView: React.FC<TagsManagerViewProps> = ({
   }, [tags, filterCategory, searchQuery, sortBy]);
 
   return (
-    <div className="w-full h-full flex flex-col bg-black text-white overflow-hidden select-none">
+    <div
+      className="w-full h-full flex flex-col bg-black text-white overflow-y-auto overscroll-y-contain custom-scrollbar pb-32 md:pb-12"
+      style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}
+    >
       {/* Toast Bar */}
       {toast && (
         <div
@@ -266,8 +269,8 @@ export const TagsManagerView: React.FC<TagsManagerViewProps> = ({
         </div>
       )}
 
-      {/* Top Header Bar */}
-      <header className="px-4 sm:px-8 py-4 border-b border-white/10 bg-zinc-950/80 backdrop-blur-xl flex flex-col gap-4 shrink-0">
+      {/* Sticky Header Bar */}
+      <header className="sticky top-0 z-30 px-4 sm:px-8 py-4 border-b border-white/10 bg-zinc-950/95 backdrop-blur-xl flex flex-col gap-4 shrink-0 shadow-lg">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <button
@@ -351,7 +354,7 @@ export const TagsManagerView: React.FC<TagsManagerViewProps> = ({
       </header>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar px-4 sm:px-8 py-5 flex flex-col gap-4">
+      <div className="w-full max-w-7xl mx-auto px-4 sm:px-8 py-5 flex flex-col gap-4">
         {/* Candidate Auto-Convert Prompt */}
         {candidateCharacters.length > 0 && (
           <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/50 via-zinc-900 to-cyan-950/50 border border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xl">

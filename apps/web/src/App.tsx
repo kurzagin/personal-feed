@@ -925,7 +925,7 @@ export const App: React.FC = () => {
 
         {/* VIEW 6: TAGS MANAGEMENT FULL PAGE */}
         {tab === "tags" && (
-          <div className="w-full h-full flex-1 overflow-hidden">
+          <div className="w-full h-full flex-1 min-h-0 overflow-hidden">
             <TagsManagerView
               onBack={goBack}
               onNavigateToExplore={(tagName) => {
