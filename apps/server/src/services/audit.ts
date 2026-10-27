@@ -139,9 +139,10 @@ export async function runStorageAudit(db: Database, storage: StorageProvider): P
     }
   }
 
-  // Check orphaned files in R2 (R2 ghosts)
+  // Check orphaned files in R2 (R2 ghosts) - only consider media/ prefix
   let orphanedR2Count = 0;
   for (const [key, meta] of r2Objects.entries()) {
+    if (!key.startsWith("media/")) continue;
     if (!expectedKeys.has(key)) {
       orphanedR2Count++;
       issues.push({

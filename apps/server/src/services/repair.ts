@@ -64,8 +64,12 @@ export async function repairPostVideo(
   const itemIdMatch = oldStorageKey.match(/media\/([^\.\/]+)/);
   const itemId = itemIdMatch ? itemIdMatch[1] : postId;
 
+  console.log(`[repair] Starting HLS transcode for ${postId} (${rawVideoBuffer.length} bytes)...`);
   const hlsResult = await processVideoToHLS(rawVideoBuffer, itemId, {
     timeoutMs: Math.max(600_000, Math.round((rawVideoBuffer.length / 100_000) * 1000)),
+    onProgress: (p) => {
+      console.log(`[repair] ${p.stage}: ${p.percent}% - ${p.detail || ""}`);
+    },
   });
 
   // Upload segments, 3x3 grid, scrub sheets, and scrub VTT
